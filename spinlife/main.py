@@ -5,28 +5,29 @@ spinlife — VASP PROCAR 自旋寿命计算流水线
 用法:
   python -m spinlife.main PROCAR [--vbm N] [--cbm N] [--tau-p 0.1]
          [--k-range 0.05] [--T 300] [--output-dir .]
+         [--soc-vbm UPPER LOWER] [--soc-cbm UPPER LOWER]
+         [--list-bands]
 
 步骤:
-  1. 解析 PROCAR → 提取 k 点、能带能量、自旋期望值
+  1. 解析 PROCAR -> k 点、能带能量、自旋期望值
   2. 自动检测 VBM/CBM (或用户指定)
-  3. 提取 SOC 劈裂的双带能量 + 自旋织构
+  3. 输出 Γ 点能带表, 交互式选择 SOC 带对
   4. 拟合有效质量 m*
-  5. 拟合 √(α²+β²) + 分离 α, β
-  6. 计算自旋寿命 τ_s + PSH 周期 L_PSH
+  5. 拟合 sqrt(a^2+b^2) + 分离 alpha, beta
+  6. 计算自旋寿命 tau_s + PSH 周期 L_PSH
   7. 绘图 + 输出报告
 
 输出:
   - 终端报告
-  - spinlife_report.txt   — 文本报告
-  - alpha_beta_fit.png    — α,β 拟合图 (含能带劈裂+自旋织构)
-  - spin_texture.png      — 自旋织构图 (可选)
+  - spinlife_report.txt   文本报告
+  - spinlife_results.png  拟合图 (VBM + CBM 双列)
+  - band_table.txt        Γ 点能带数据
 """
 
 import sys
 import os
 import numpy as np
 
-# matplotlib 可选
 try:
     import matplotlib
     matplotlib.use('Agg')
@@ -40,28 +41,186 @@ from .fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
 
 
 def build_k_grid(kpoints):
-    """
-    从 k 点列表重建 2D 网格
-
-    从 PROCAR 读取的 k 点是 2D 网格 (如 9×9=81 点),
-    需要重建为 (nkx, nky) 网格用于自旋织构绘图.
-    """
     kx_vals = sorted(set(kp[0] for kp in kpoints))
     ky_vals = sorted(set(kp[1] for kp in kpoints))
     nkx, nky = len(kx_vals), len(ky_vals)
     return kx_vals, ky_vals, nkx, nky
 
 
-def find_nearest_k(kpoints, kx_target, ky_target):
-    """找最近的 k 点索引"""
-    best = 0
-    best_d = 1e10
-    for i, kp in enumerate(kpoints):
-        d = (kp[0] - kx_target)**2 + (kp[1] - ky_target)**2
-        if d < best_d:
-            best_d = d
-            best = i
-    return best
+def list_bands(procar, output_dir='.'):
+    gamma_ik = 0
+    min_dist = 1e10
+    for ik in range(1, procar.nk + 1):
+        kp = procar.kpoints[ik - 1]
+        d = kp[0]**2 + kp[1]**2 + kp[2]**2
+        if d < min_dist:
+            min_dist = d
+            gamma_ik = ik
+
+    print(f"\n{'Band':>6} {'E (eV)':>12} {'Occ':>8}   Note")
+    print("-" * 45)
+    rows = []
+    vbm_found = False
+    for ib in range(1, procar.nbands + 1):
+        E = procar.bands[(gamma_ik, ib)]['energy']
+        occ = procar.bands[(gamma_ik, ib)]['occ']
+        note = ''
+        if not vbm_found and occ > 0.5 and ib < procar.nbands \
+                and procar.bands[(gamma_ik, ib + 1)]['occ'] < 0.5:
+            note = '<-- VBM'
+            vbm_found = True
+        elif vbm_found and occ < 0.5 and not note:
+            note = '<-- CBM'
+            vbm_found = False
+        print(f"{ib:>6} {E:>12.4f} {occ:>8.4f}  {note}")
+        rows.append((ib, E, occ))
+
+    path = os.path.join(output_dir, 'band_table.txt')
+    with open(path, 'w') as f:
+        f.write("# Band  Energy(eV)  Occupation  Note\n")
+        for ib, E, occ in rows:
+            f.write(f"{ib} {E:.6f} {occ:.6f}\n")
+    print(f"\n  [band_table.txt saved]")
+    return gamma_ik
+
+
+def get_k_slice(kpts, procar):
+    kx_vals = sorted(set(kpts[:, 0]))
+    ky_vals = sorted(set(kpts[:, 1]))
+    dkx = max(abs(kx_vals[1] - kx_vals[0]), 0.01) if len(kx_vals) > 1 else 0.01
+
+    idx_slice = [i for i, kp in enumerate(procar.kpoints)
+                 if abs(kp[1] - 0) < dkx / 2]
+    if len(idx_slice) < 3:
+        idx_slice = list(range(procar.nk))
+
+    k_slice = (kpts[idx_slice, 0]
+               if abs(kpts[idx_slice[0], 1]) < 0.01
+               else kpts[idx_slice, 1])
+    order = np.argsort(k_slice)
+    return idx_slice, k_slice[order], order
+
+
+def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
+                mstar_band, soc_upper, soc_lower,
+                tau_p, T, k_range, extrema_type='max'):
+    """
+    对指定 SOC 带对运行完整拟合流程
+
+    Parameters
+    ----------
+    label : str           标签 (如 'VBM', 'CBM')
+    mstar_band : int      用于有效质量拟合的能带
+    soc_upper, soc_lower : int  SOC 带对
+    extrema_type : 'max' | 'min'  极值类型
+    """
+    print(f"\n{'='*62}")
+    print(f"  {label}: m* band={mstar_band}, "
+          f"SOC pair={soc_upper}/{soc_lower}")
+    print(f"{'='*62}")
+
+    # --- k 切片 + 极值点 ---
+    E_ext = procar.get_band_energy(mstar_band)
+    E_slice = E_ext[idx_slice][order]
+
+    if extrema_type == 'max':
+        k0 = k_scan[np.argmax(E_slice)]
+    else:
+        k0 = k_scan[np.argmin(E_slice)]
+
+    # --- 有效质量 ---
+    k_step = (np.min(np.diff(sorted(set(k_scan))))
+              if len(set(k_scan)) > 1 else 0.05)
+    auto_k_range = max(k_range, k_step * 1.5)
+
+    m_star, r2_m, n_pts = fit_effmass(k_scan, E_slice, k0, auto_k_range)
+
+    if m_star:
+        print(f"  m* = {m_star:.2f} m0  (R^2={r2_m:.3f}, "
+              f"k0={k0:.3f}, range=+/-{auto_k_range:.3f})")
+    else:
+        print(f"  m*: fit failed ({n_pts} pts in +/-{auto_k_range})")
+
+    # --- SOC 劈裂 + alpha/beta ---
+    E_up = procar.get_band_energy(soc_upper)
+    E_lo = procar.get_band_energy(soc_lower)
+    sx_up, sy_up, sz_up = procar.get_spin(soc_upper)
+    sx_lo, sy_lo, _ = procar.get_spin(soc_lower)
+
+    res = {
+        'label': label,
+        'bands': (soc_upper, soc_lower),
+        'm_star': m_star,
+        'k0': k0,
+        'auto_k_range': auto_k_range,
+    }
+
+    E_up_scan = E_up[idx_slice][order]
+    E_lo_scan = E_lo[idx_slice][order]
+    sx_up_scan = sx_up[idx_slice][order]
+    sy_up_scan = sy_up[idx_slice][order]
+    sx_lo_scan = sx_lo[idx_slice][order]
+
+    res['k_scan'] = k_scan
+    res['E_up_scan'] = E_up_scan
+    res['E_lo_scan'] = E_lo_scan
+    res['sx_up_scan'] = sx_up_scan
+    res['sy_up_scan'] = sy_up_scan
+
+    ab_norm, Delta, r2_ab = fit_alpha_beta(
+        k_scan, E_up_scan, E_lo_scan, k0, auto_k_range)
+
+    if ab_norm:
+        print(f"  sqrt(a^2+b^2) = {ab_norm*1000:.2f} meV.A")
+        print(f"  Delta         = {Delta*1000:.2f} meV  "
+              f"(R^2={r2_ab:.4f})")
+        res.update(ab_norm=ab_norm, Delta=Delta, r2_ab=r2_ab)
+
+        # 自旋织构 -> alpha/beta 分离
+        dk = np.abs(k_scan - k0)
+        near = dk <= auto_k_range
+        if np.sum(near) >= 3:
+            kn = k_scan[near] - k0
+            p_x = np.polyfit(kn, sx_up_scan[near], 1)
+            p_y = np.polyfit(kn, sy_up_scan[near], 1)
+            ratio = p_x[0] / (p_y[0] + 1e-30) if abs(p_y[0]) > 1e-30 else 1e6
+
+            p_x2 = np.polyfit(kn, sx_lo_scan[near], 1)
+            p_y2 = np.polyfit(kn, sy_lo_scan[near], 1)
+            ratio2 = p_x2[0] / (p_y2[0] + 1e-30) if abs(p_y2[0]) > 1e-30 else 1e6
+            if abs(ratio2) > abs(ratio):
+                ratio = ratio2
+
+            if abs(ratio) > 1e-6 and abs(ratio) < 1e6:
+                alpha = ab_norm / np.sqrt(1 + 1 / ratio**2)
+                beta = alpha / ratio
+                print(f"  <sx>/<sy> ratio = {ratio:.3f}")
+                print(f"  alpha = {alpha*1000:.2f} meV.A")
+                print(f"  beta  = {beta*1000:.2f} meV.A")
+                res.update(alpha=alpha, beta=beta, ratio=ratio)
+
+                # --- 自旋寿命 ---
+                if m_star:
+                    spin = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
+                    if spin:
+                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps")
+                        print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
+                        res['spin'] = spin
+            else:
+                print(f"  (spin ratio unstable: {ratio:.3f}, skip)")
+                res.update(alpha=None, beta=None, ratio=None)
+    else:
+        print(f"  alpha/beta: fit failed (R^2={r2_ab})")
+
+    return res
+
+
+def _interactive_band(prompt, default):
+    try:
+        inp = input(prompt).strip()
+        return int(inp) if inp else default
+    except (EOFError, KeyboardInterrupt):
+        return default
 
 
 def main():
@@ -71,259 +230,190 @@ def main():
 
     procar_file = sys.argv[1] if os.path.exists(sys.argv[1]) else None
     if not procar_file:
-        print(f"文件不存在: {sys.argv[1]}")
+        print(f"File not found: {sys.argv[1]}")
         sys.exit(1)
 
-    # --- 参数 ---
+    # --- 解析参数 ---
     vbm_band = None
     cbm_band = None
-    tau_p = 0.1         # ps, 动量散射时间 (默认)
-    k_range = 0.05      # Å⁻¹, 拟合范围
-    T = 300             # K
+    soc_vbm_up = soc_vbm_lo = None
+    soc_cbm_up = soc_cbm_lo = None
+    tau_p = 0.1
+    k_range = 0.05
+    T = 300
     output_dir = '.'
+    list_bands_only = False
 
     i = 2
     while i < len(sys.argv):
-        if sys.argv[i] == '--vbm' and i+1 < len(sys.argv):
-            vbm_band = int(sys.argv[i+1]); i += 2
-        elif sys.argv[i] == '--cbm' and i+1 < len(sys.argv):
-            cbm_band = int(sys.argv[i+1]); i += 2
-        elif sys.argv[i] == '--tau-p' and i+1 < len(sys.argv):
-            tau_p = float(sys.argv[i+1]); i += 2
-        elif sys.argv[i] == '--k-range' and i+1 < len(sys.argv):
-            k_range = float(sys.argv[i+1]); i += 2
-        elif sys.argv[i] == '--T' and i+1 < len(sys.argv):
-            T = float(sys.argv[i+1]); i += 2
-        elif sys.argv[i] == '--output-dir' and i+1 < len(sys.argv):
-            output_dir = sys.argv[i+1]; i += 2
+        arg = sys.argv[i]
+        if arg == '--vbm' and i + 1 < len(sys.argv):
+            vbm_band = int(sys.argv[i + 1]); i += 2
+        elif arg == '--cbm' and i + 1 < len(sys.argv):
+            cbm_band = int(sys.argv[i + 1]); i += 2
+        elif arg == '--soc-vbm' and i + 2 < len(sys.argv):
+            soc_vbm_up = int(sys.argv[i + 1])
+            soc_vbm_lo = int(sys.argv[i + 2]); i += 3
+        elif arg == '--soc-cbm' and i + 2 < len(sys.argv):
+            soc_cbm_up = int(sys.argv[i + 1])
+            soc_cbm_lo = int(sys.argv[i + 2]); i += 3
+        elif arg == '--tau-p' and i + 1 < len(sys.argv):
+            tau_p = float(sys.argv[i + 1]); i += 2
+        elif arg == '--k-range' and i + 1 < len(sys.argv):
+            k_range = float(sys.argv[i + 1]); i += 2
+        elif arg == '--T' and i + 1 < len(sys.argv):
+            T = float(sys.argv[i + 1]); i += 2
+        elif arg == '--output-dir' and i + 1 < len(sys.argv):
+            output_dir = sys.argv[i + 1]; i += 2
+        elif arg == '--list-bands':
+            list_bands_only = True; i += 1
         else:
             i += 1
 
     os.makedirs(output_dir, exist_ok=True)
 
-    # ========== 步骤 1: 解析 PROCAR ==========
     print("=" * 65)
-    print("  spinlife — VASP 自旋寿命计算流水线")
+    print("  spinlife -- VASP Spin Lifetime Calculator")
     print("=" * 65)
-    print(f"  PROCAR: {procar_file}")
-    print(f"  τ_p   : {tau_p} ps")
-    print(f"  拟合范围: ±{k_range} Å⁻¹")
-    print(f"  T     : {T} K")
+    print(f"  PROCAR : {procar_file}")
+    print(f"  tau_p  : {tau_p} ps")
+    print(f"  k_range: {k_range} A^-1")
+    print(f"  T      : {T} K")
 
     procar = PROCAR(procar_file)
     procar.summary()
 
-    # ========== 步骤 2: 检测 VBM/CBM ==========
+    # ========== 输出能带表 ==========
+    list_bands(procar, output_dir)
+    if list_bands_only:
+        sys.exit(0)
+
+    kpts = procar.get_kpoints_cart()
+    _, _, nkx, nky = build_k_grid(procar.kpoints)
+
+    # 检测 VBM/CBM
     vbm, cbm = procar.find_vbm_cbm()
     if vbm_band is not None:
-        vbm = vbm_band
-        cbm = vbm + 1
+        vbm = vbm_band; cbm = vbm + 1
     if cbm_band is not None:
-        cbm = cbm_band
-        vbm = cbm - 1
-
+        cbm = cbm_band; vbm = cbm - 1
     print(f"\n  VBM: band {vbm}, CBM: band {cbm}")
 
-    # ========== 步骤 3: 提取数据 ==========
-    kpts = procar.get_kpoints_cart()
-    E_vbm = procar.get_band_energy(vbm)
-    E_cbm = procar.get_band_energy(cbm)
-    sx_vbm, sy_vbm, sz_vbm = procar.get_spin(vbm)
-    sx_cbm, sy_cbm, sz_cbm = procar.get_spin(cbm)
-
-    # 重建 k 网格
-    kx_vals, ky_vals, nkx, nky = build_k_grid(procar.kpoints)
-    print(f"  网格: {nkx}×{nky} = {nkx*nky} k 点")
-
-    # --- 初始化变量 (防止条件分支未赋值导致 UnboundLocalError) ---
-    m_star_vbm = r2_m = None
-    ab_norm = Delta = r2_ab = alpha = beta = ratio = None
-    k0 = 0.0
-    k_scan = E_up_scan = E_lo_scan = None
-    sx_up_scan = sy_up_scan = None
-    result = None
-    soc_upper = vbm
-    soc_lower = max(vbm - 1, 1)
-
-    # ========== 步骤 4: 确定 k 空间切面 ==========
-    # 尝试沿 ky=const 或 kx=const 找极值点
-    # 首先检查各 ky 切片
-    kx_vals = sorted(set(kpts[:, 0]))
-    ky_vals = sorted(set(kpts[:, 1]))
-    dkx = max(abs(kx_vals[1] - kx_vals[0]), 0.01) if len(kx_vals) > 1 else 0.01
-
-    # 尝试 ky=0 切片, 若不存在则用全部 k 点
-    idx_slice = [i for i, kp in enumerate(procar.kpoints) if abs(kp[1] - 0) < dkx/2]
+    # ========== k 切片 ==========
+    idx_slice, k_scan, order = get_k_slice(kpts, procar)
     if len(idx_slice) < 3:
         idx_slice = list(range(procar.nk))
+        k_scan = np.linspace(-0.5, 0.5, procar.nk)
+        order = np.argsort(k_scan)
+        k_scan = k_scan[order]
 
-    k_slice = kpts[idx_slice, 0] if abs(kpts[idx_slice[0], 1]) < 0.01 else kpts[idx_slice, 1]
-    E_slice = E_vbm[idx_slice]
-    order = np.argsort(k_slice)
-    k_scan = k_slice[order]
-    E_scan = E_slice[order]
-    k0 = k_scan[np.argmax(E_scan)]
+    # ========== SOC 能带选择 (交互式 / 命令行) ==========
+    if soc_vbm_up is None:
+        print("\n--- VBM SOC Bands ---")
+        soc_vbm_up = _interactive_band(
+            f"  m* band [{vbm}]: ", vbm)
+        soc_vbm_lo = _interactive_band(
+            f"  SOC lower (partner) band [{max(vbm - 1, 1)}]: ",
+            max(vbm - 1, 1))
+    if soc_cbm_up is None:
+        print("\n--- CBM SOC Bands ---")
+        soc_cbm_up = _interactive_band(
+            f"  m* band [{cbm}]: ", cbm)
+        soc_cbm_lo = _interactive_band(
+            f"  SOC upper (partner) band [{min(cbm + 1, procar.nbands)}]: ",
+            min(cbm + 1, procar.nbands))
 
-    # 自动确定合适的 k_range (至少包含 3 个点)
-    k_step = np.min(np.diff(sorted(set(k_scan)))) if len(set(k_scan)) > 1 else 0.05
-    auto_k_range = max(k_range, k_step * 1.5)
+    # ========== VBM 拟合 ==========
+    res_vbm = run_soc_fit(
+        'VBM', procar, kpts, idx_slice, k_scan, order,
+        mstar_band=soc_vbm_up, soc_upper=soc_vbm_up, soc_lower=soc_vbm_lo,
+        tau_p=tau_p, T=T, k_range=k_range, extrema_type='max')
 
-    # ========== 步骤 5: 拟合有效质量 ==========
-    m_star_vbm, r2_m, n_pts = fit_effmass(k_scan, E_scan, k0, auto_k_range)
-    print(f"\n--- 有效质量 ---")
-    if m_star_vbm:
-        print(f"  m*(VBM) = {m_star_vbm:.2f} m0  (R^2={r2_m:.3f}, k0={k0:.3f})")
-    else:
-        print(f"  (拟合范围 ±{auto_k_range} 内仅 {n_pts} 个点, 尝试用更大的 k 范围)")
+    # ========== CBM 拟合 ==========
+    res_cbm = run_soc_fit(
+        'CBM', procar, kpts, idx_slice, k_scan, order,
+        mstar_band=soc_cbm_up, soc_upper=soc_cbm_up, soc_lower=soc_cbm_lo,
+        tau_p=tau_p, T=T, k_range=k_range, extrema_type='min')
 
-    # ========== 步骤 6: 拟合 α, β ==========
-    print(f"\n--- SOC coefficients alpha, beta ---")
-
-    E_up = procar.get_band_energy(soc_upper)
-    E_lo = procar.get_band_energy(soc_lower)
-    sx_up, sy_up, sz_up = procar.get_spin(soc_upper)
-    sx_lo, sy_lo, sz_lo = procar.get_spin(soc_lower)
-
-    # 沿选定的 k 方向拟合
-    if len(idx_slice) >= 3:
-        E_up_scan = E_up[idx_slice][order]
-        E_lo_scan = E_lo[idx_slice][order]
-        sx_up_scan = sx_up[idx_slice][order]
-        sy_up_scan = sy_up[idx_slice][order]
-
-        ab_norm, Delta, r2_ab = fit_alpha_beta(k_scan, E_up_scan, E_lo_scan, k0, auto_k_range)
-
-        if ab_norm:
-            print(f"  √(α²+β²) = {ab_norm*1000:.2f} meV·Å")
-            print(f"  Δ        = {Delta*1000:.2f} meV")
-            print(f"  R²       = {r2_ab:.4f}")
-
-            # 从自旋织构分离 α/β
-            # 方法: 对 ⟨σ_x⟩ vs k 和 ⟨σ_y⟩ vs k 做线性拟合,
-            # 斜率比 = α/β (因为 ⟨σ_x⟩ = 2αk/Δ, ⟨σ_y⟩ = 2βk/Δ)
-            dk = np.abs(k_scan - k0)
-            near = dk <= auto_k_range
-            if np.sum(near) >= 3:
-                kn = k_scan[near] - k0
-                p_x = np.polyfit(kn, sx_up_scan[near], 1)
-                p_y = np.polyfit(kn, sy_up_scan[near], 1)
-                slope_x, slope_y = p_x[0], p_y[0]
-                ratio = slope_x / (slope_y + 1e-30) if abs(slope_y) > 1e-30 else 1e6
-                # 也用 lower band 验证
-                p_x2 = np.polyfit(kn, sx_lo[idx_slice][order][near], 1)
-                p_y2 = np.polyfit(kn, sy_lo[idx_slice][order][near], 1)
-                ratio2 = p_x2[0] / (p_y2[0] + 1e-30) if abs(p_y2[0]) > 1e-30 else 1e6
-                if abs(ratio2) > abs(ratio):
-                    ratio = ratio2
-
-                if abs(ratio) > 1e-6 and abs(ratio) < 1e6:
-                    alpha = ab_norm / np.sqrt(1 + 1/ratio**2)
-                    beta = alpha / ratio
-                    print(f"  ⟨σ_x⟩/⟨σ_y⟩ = {ratio:.3f}")
-                    print(f"  α = {alpha*1000:.2f} meV·Å")
-                    print(f"  β = {beta*1000:.2f} meV·Å")
-                else:
-                    alpha = beta = None
-                    ratio = None
-
-                # ========== 步骤 7: 自旋寿命 ==========
-                print(f"\n--- Spin Lifetime ---")
-                if alpha and m_star_vbm:
-                    result = calc_spin_lifetime(alpha, beta, m_star_vbm, tau_p, T)
-                    if result:
-                        print(f"  τ_s ≈ {result['tau_s_ps']:.2f} ps")
-                        print(f"  L_PSH ≈ {result['L_PSH_um']:.2f} μm")
+    results = [res_vbm, res_cbm]
 
     # ========== 绘图 ==========
-    if _HAS_MPL and k_scan is not None:
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-        fig.suptitle(f'spinlife — VBM Band {vbm}, SOC Partner Band {soc_lower}', fontsize=13)
+    if _HAS_MPL:
+        valid = [r for r in results if r.get('k_scan') is not None]
+        ncol = len(valid)
+        if ncol > 0:
+            fig, axes = plt.subplots(2, ncol, figsize=(6 * ncol, 10))
+            if ncol == 1:
+                axes = axes.reshape(2, 1)
+            fig.suptitle('spinlife -- SOC Fitting Results', fontsize=13)
 
-        # (a) SOC 劈裂能带
-        ax1 = axes[0, 0]
-        ax1.plot(k_scan, E_up_scan*1000, 'o-', ms=4, label=f'Band {soc_upper}')
-        ax1.plot(k_scan, E_lo_scan*1000, 's-', ms=4, label=f'Band {soc_lower}')
-        ax1.axvspan(k0-auto_k_range, k0+auto_k_range, alpha=0.08, color='blue')
-        ax1.axvline(k0, color='gray', ls='--', alpha=0.5)
-        ax1.set_xlabel('k (A^-1)')
-        ax1.set_ylabel('E (meV)')
-        ax1.legend(fontsize=9)
-        ax1.set_title('SOC-split Bands')
+            for col, res in enumerate(valid):
+                ks = res['k_scan']
+                up, lo = res['bands']
+                k0 = res['k0']
+                akr = res['auto_k_range']
+                E_us = res['E_up_scan']
+                E_ls = res['E_lo_scan']
 
-        # (b) DeltaE^2 vs k^2 拟合
-        ax2 = axes[0, 1]
-        dE = np.abs(E_up_scan - E_lo_scan) * 1000
-        x = (k_scan - k0)**2
-        ax2.plot(x, dE**2, 'o', ms=5)
-        if ab_norm:
-            coeffs = np.polyfit(x, dE**2, 1)
-            xs = np.linspace(0, max(x)*1.05, 100)
-            ax2.plot(xs, coeffs[0]*xs+coeffs[1], '-',
-                     label=rf'ab^2={ab_norm**2*1e6:.1f} (meV.A)^2')
-        ax2.set_xlabel('(k-k0)^2 (A^-2)')
-        ax2.set_ylabel('ΔE² (meV²)')
-        ax2.legend(fontsize=9)
-        ax2.set_title('ΔE² Linear Fit')
+                ax = axes[0, col]
+                ax.plot(ks, E_us * 1000, 'o-', ms=4, label=f'Band {up}')
+                ax.plot(ks, E_ls * 1000, 's-', ms=4, label=f'Band {lo}')
+                ax.axvspan(k0 - akr, k0 + akr, alpha=0.08, color='blue')
+                ax.axvline(k0, color='gray', ls='--', alpha=0.5)
+                ax.set_xlabel('k (A^-1)')
+                ax.set_ylabel('E (meV)')
+                ax.legend(fontsize=9)
+                ax.set_title(f'{res["label"]}: SOC-split Bands')
 
-        # (c) 自旋织构 ⟨σ_x⟩, ⟨σ_y⟩
-        ax3 = axes[1, 0]
-        ax3.plot(k_scan, sx_up_scan, 'o-', ms=4, label='<sx> upper')
-        ax3.plot(k_scan, sy_up_scan, 's-', ms=4, label='<sy> upper')
-        ax3.axvspan(k0-k_range, k0+k_range, alpha=0.08, color='blue')
-        ax3.axhline(0, color='gray', lw=0.5)
-        ax3.set_xlabel('k (A^-1)')
-        ax3.set_ylabel('<sigma>')
-        ax3.legend(fontsize=9)
-        ax3.set_title(f'Spin Texture (Band {soc_upper})')
+                ax = axes[1, col]
+                dE = np.abs(E_us - E_ls) * 1000
+                x = (ks - k0)**2
+                ax.plot(x, dE**2, 'o', ms=5)
+                if res.get('ab_norm'):
+                    coeffs = np.polyfit(x, dE**2, 1)
+                    xs = np.linspace(0, max(x) * 1.05, 100)
+                    label = rf'$(\alpha^2+\beta^2)k^2$ fit'
+                    ax.plot(xs, coeffs[0] * xs + coeffs[1], '-', label=label)
+                ax.set_xlabel('(k-k0)^2 (A^-2)')
+                ax.set_ylabel(r'$\Delta E^2$ (meV$^2$)')
+                ax.legend(fontsize=9)
+                ax.set_title(f'{res["label"]}: DE^2 Fit')
 
-        # (d) 自旋织构 2D
-        ax4 = axes[1, 1]
-        # 重建 2D 网格
-        if nkx * nky == procar.nk:
-            S_mag = np.sqrt(sx_up**2 + sy_up**2 + sz_up**2)
-            # 重排成网格
-            S_grid = np.zeros((nky, nkx))
-            for ik, kp in enumerate(procar.kpoints):
-                ix = kx_vals.index(kp[0])
-                iy = ky_vals.index(kp[1])
-                S_grid[iy, ix] = S_mag[ik]
-            im = ax4.imshow(S_grid, origin='lower',
-                           extent=[min(kx_vals), max(kx_vals),
-                                   min(ky_vals), max(ky_vals)],
-                           cmap='RdYlBu_r')
-            plt.colorbar(im, ax=ax4, label='|⟨σ⟩|')
-            ax4.set_xlabel('k_x')
-            ax4.set_ylabel('k_y')
-            ax4.set_title('Spin Magnitude (2D)')
+            plt.tight_layout()
+            out_png = os.path.join(output_dir, 'spinlife_results.png')
+            plt.savefig(out_png, dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"\n  [Plot: {out_png}]")
 
-        plt.tight_layout()
-        out_png = os.path.join(output_dir, 'spinlife_results.png')
-        plt.savefig(out_png, dpi=200, bbox_inches='tight')
-        plt.close()
-        print(f"  [图片: {out_png}]")
-
-    # ========== 保存文本报告 ==========
-    report = os.path.join(output_dir, 'spinlife_report.txt')
-    with open(report, 'w') as f:
-        f.write("spinlife — VASP 自旋寿命计算报告\n")
+    # ========== 报告 ==========
+    report_path = os.path.join(output_dir, 'spinlife_report.txt')
+    with open(report_path, 'w') as f:
+        f.write("spinlife -- VASP Spin Lifetime Report\n")
         f.write("=" * 50 + "\n")
         f.write(f"PROCAR: {procar_file}\n")
-        f.write(f"τ_p: {tau_p} ps\n")
-        f.write(f"T: {T} K\n\n")
-        f.write(f"VBM: band {vbm}, CBM: band {cbm}\n")
-        f.write(f"k grid: {nkx}x{nky}\n")
-        if m_star_vbm is not None:
-            f.write(f"m*(VBM): {m_star_vbm:.2f} m0  (R^2={r2_m:.3f})\n")
-        if ab_norm is not None:
-            f.write(f"sqrt(a^2+b^2): {ab_norm*1000:.2f} meV.A\n")
-            f.write(f"Delta: {Delta*1000:.2f} meV\n")
-        if alpha is not None and beta is not None:
-            f.write(f"alpha: {alpha*1000:.2f} meV.A\n")
-            f.write(f"beta: {beta*1000:.2f} meV.A\n")
-            f.write(f"alpha/beta: {ratio:.3f}\n")
-        if result is not None:
-            f.write(f"τ_s: {result['tau_s_ps']:.2f} ps\n")
-            f.write(f"L_PSH: {result['L_PSH_um']:.2f} μm\n")
+        f.write(f"tau_p : {tau_p} ps\n")
+        f.write(f"T     : {T} K\n")
+        f.write(f"VBM   : band {vbm}\n")
+        f.write(f"CBM   : band {cbm}\n")
+        f.write(f"k grid: {nkx}x{nky}\n\n")
 
-    print(f"\n  [报告: {report}]")
+        for res in results:
+            up, lo = res['bands']
+            f.write(f"--- {res['label']}: band {up}/{lo} ---\n")
+            if res.get('m_star'):
+                f.write(f"m* = {res['m_star']:.2f} m0\n")
+            if res.get('ab_norm'):
+                f.write(f"sqrt(a^2+b^2) = {res['ab_norm']*1000:.2f} meV.A\n")
+                f.write(f"Delta = {res['Delta']*1000:.2f} meV\n")
+            if res.get('alpha'):
+                f.write(f"alpha = {res['alpha']*1000:.2f} meV.A\n")
+                f.write(f"beta  = {res['beta']*1000:.2f} meV.A\n")
+                f.write(f"alpha/beta = {res['ratio']:.3f}\n")
+            if res.get('spin'):
+                s = res['spin']
+                f.write(f"tau_s  = {s['tau_s_ps']:.2f} ps\n")
+                f.write(f"L_PSH  = {s['L_PSH_um']:.2f} um\n")
+            f.write("\n")
+
+    print(f"\n  [Report: {report_path}]")
     print("=" * 65)
