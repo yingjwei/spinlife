@@ -3,8 +3,8 @@
 Extract SOC parameters (α, β) and calculate spin lifetime τ_s directly from VASP LSORBIT PROCAR files.
 
 ```
-spinlife/              # Main package: VASP PROCAR → α, β, τ_s
-legacy/                # Legacy: QE + Phonon + Perturbo workflow for W6CCl16
+spinlife/          VASP PROCAR → α, β, τ_s (k·p + DP 机制)
+qe_perturbo/       QE → Phonon → Perturbo workflow (EY + DP 机制)
 ```
 
 ## Quick Start
@@ -31,6 +31,6 @@ python -m spinlife.main path/to/PROCAR
 
 k·p model → ΔE² vs k² fit → √(α²+β²) → spin texture slope → α/β ratio → DP spin lifetime
 
-## Legacy
+## QE → Perturbo (W6CCl16)
 
-The `legacy/` directory contains a QE → Phonon → Perturbo workflow for W6CCl16 spin lifetime calculation (Elliott-Yafet & D'yakonov-Perel mechanisms).
+The `qe_perturbo/` directory contains a complete DFT → Phonon → Perturbo workflow for W6CCl16 spin lifetime calculation, covering both Elliott-Yafet and D'yakonov-Perel mechanisms.
