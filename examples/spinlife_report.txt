@@ -1,0 +1,16 @@
+spinlife — VASP 自旋寿命计算报告
+==================================================
+PROCAR: C:/Users/15756/Desktop/data/output/VASP/PROCAR
+τ_p: 0.1 ps
+T: 300 K
+
+VBM: band 44, CBM: band 45
+k grid: 9x9
+m*(VBM): 4.32 m0  (R^2=1.000)
+sqrt(a^2+b^2): 31.43 meV.A
+Delta: 0.00 meV
+alpha: 15.72 meV.A
+beta: 27.22 meV.A
+alpha/beta: 0.577
+τ_s: 3790.90 ps
+L_PSH: 0.00 μm

@@ -1,119 +1,36 @@
-# W6CCl16 Spin Lifetime Calculation
+# spinlife — VASP PROCAR Spin Lifetime Calculator
 
-**W6CCl16** — 窄带隙半导体，二维结构，无磁。
-自旋寿命主要由 **Elliott-Yafet (EY)** 和 **D'yakonov-Perel' (DP)** 机制决定。
-
----
-
-## 结构参数 (来源: wannier90.win)
-
-| 参数 | 值 |
-|------|------|
-| 晶格 a | 12.997 Å |
-| 晶格 b | 10.251 Å |
-| 晶格 c | 26.539 Å |
-| 总原子数 | 46 (12W + 2C + 32Cl) |
-| Wannier 函数 | 488 |
-| 能带数 | 512 |
-| mp_grid | 3×3×1 |
-| 自旋 | SOC (spinor) |
-
-**冻结窗口**: -6.59 → 1.41 eV (VBM ~ 0)  
-**外窗口**: -78.0 → +3.10 eV  
-
----
-
-## 完整计算流程
+Extract SOC parameters (α, β) and calculate spin lifetime τ_s directly from VASP LSORBIT PROCAR files.
 
 ```
-阶段一: QE 电子结构
-├── 1_scf/       SCF 自洽 (SOC)
-├── 2_nscf/      NSCF 高密 k 点
-└── pw2wannier90 → wannier90.mmn/.amn/.eig
-
-阶段二: Wannier90 MLWF
-└── wannier90.win → wannier90.amn/.mmn/.eig
-
-阶段三: QE 声子 (DFPT)  ← 电子-声子散射矩阵
-├── ph.in        声子微扰 (q 点网格 3×3×1)
-├── q2r.in       dynmat → 原子间力常数 (IFC)
-├── matdyn.in    声子色散
-└── dynmat 文件 → EPW / Perturbo elphmat
-
-阶段四: EPW 电子-声子耦合 ← 推荐路径
-└── epw.in       el-ph 矩阵元 (Wannier 插值)
-
-阶段五: Perturbo 自旋动力学
-├── qe2pert.in   QE → Perturbo 格式
-├── ephmat.in    读取 el-ph 矩阵
-└── td.in        自旋寿命 τ_s
+spinlife/              # Main package: VASP PROCAR → α, β, τ_s
+legacy/                # Legacy: QE + Phonon + Perturbo workflow for W6CCl16
 ```
 
-**注意**: 声子计算 (阶段三) 是自旋寿命计算的必要输入！
-不计算声子 → 无电子-声子散射 → 无法得到真实 τ_s
-
----
-
-## 文件说明
-
-| 文件 | 作用 |
-|------|------|
-| `params.py` | 所有可调参数 |
-| `qe_inputs.py` | QE SCF / NSCF / Wannier90 输入 |
-| `run_qe.py` | 提交 QE 计算 (SLURM) |
-| `qe_phonon_inputs.py` | QE ph / q2r / matdyn / EPW 输入 |
-| `run_phonon.py` | 提交声子计算 (SLURM) |
-| `perturbo_inputs.py` | Perturbo qe2pert / ephmat / td 输入 |
-| `run_perturbo.py` | 运行 Perturbo 自旋寿命 |
-| `analyze_results.py` | 解析 τ_s, τ_φ 等结果 |
-| `plot_lifetime.py` | 绘图 (能量/温度依赖) |
-| `run_workflow.py` | 一键运行完整流程 |
-
----
-
-## 使用方法
+## Quick Start
 
 ```bash
-# 1. 修改 params.py（赝势路径、邮箱等）
-vim params.py
-
-# 2. 生成所有输入文件
-python qe_inputs.py           # 阶段一
-python run_qe.py scf          # SCF
-python run_qe.py nscf         # NSCF
-python run_qe.py wannier      # Wannier90
-
-# 3. 声子计算 (阶段三)
-python run_phonon.py generate
-python run_phonon.py ph        # ph.x (最长，约数小时)
-python run_phonon.py q2r       # q2r.x
-python run_phonon.py matdyn    # matdyn.x
-
-# 4. EPW el-ph 耦合 (阶段四) — 推荐
-python run_phonon.py epw       # epw.x (最长，约数天)
-
-# 5. Perturbo 自旋寿命 (阶段五)
-python perturbo_inputs.py      # 生成 Perturbo 输入
-python run_perturbo.py all     # 运行完整 Perturbo
-
-# 6. 分析结果
-python analyze_results.py
-python plot_lifetime.py
+pip install -e .
+python -m spinlife.main path/to/PROCAR
 ```
 
----
+## Input
 
-## 软件依赖
+- `PROCAR`: VASP LSORBIT (non-collinear) calculation output
+- `--tau-p`: momentum scattering time τ_p (ps), from experiment or calculation
+- `--k-range`: fitting range (Å⁻¹), default 0.05
+- `--vbm N`, `--cbm N`: override automatic VBM/CBM detection
 
-- Quantum ESPRESSO 7.x (with SOC + ph.x)
-- Wannier90 3.x
-- EPW (QE 配套)
-- Perturbo (perturbopy)
-- Python 3.9+ (numpy, matplotlib, scipy)
+## Output
 
-## 参考
+- Terminal report: m*, √(α²+β²), α, β, τ_s, L_PSH
+- `spinlife_report.txt`: full text report
+- `spinlife_results.png`: 4-panel figure (SOC bands, ΔE² fit, spin texture, 2D map)
 
-- PERTURBO: https://perturbo-code.github.io/
-- QE: https://www.quantum-espresso.org/
-- Wannier90: https://wannier90.org/
-- EPW: QE 配套包
+## Method
+
+k·p model → ΔE² vs k² fit → √(α²+β²) → spin texture slope → α/β ratio → DP spin lifetime
+
+## Legacy
+
+The `legacy/` directory contains a QE → Phonon → Perturbo workflow for W6CCl16 spin lifetime calculation (Elliott-Yafet & D'yakonov-Perel mechanisms).
