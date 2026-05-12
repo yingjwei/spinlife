@@ -6,12 +6,12 @@ spinlife — VASP PROCAR 自旋寿命计算流水线
   python -m spinlife.main PROCAR [--vbm N] [--cbm N] [--tau-p 0.1]
          [--k-range 0.05] [--T 300] [--output-dir .]
          [--soc-vbm UPPER LOWER] [--soc-cbm UPPER LOWER]
-         [--list-bands]
+         [--dump-band N]
 
 步骤:
   1. 解析 PROCAR -> k 点、能带能量、自旋期望值
   2. 自动检测 VBM/CBM (或用户指定)
-  3. 输出 Γ 点能带表, 交互式选择 SOC 带对
+  3. 交互式选择 SOC 带对 (或 --soc-vbm/--soc-cbm 指定)
   4. 拟合有效质量 m*
   5. 拟合 sqrt(a^2+b^2) + 分离 alpha, beta
   6. 计算自旋寿命 tau_s + PSH 周期 L_PSH
@@ -21,7 +21,7 @@ spinlife — VASP PROCAR 自旋寿命计算流水线
   - 终端报告
   - spinlife_report.txt   文本报告
   - spinlife_results.png  拟合图 (VBM + CBM 双列)
-  - band_table.txt        Γ 点能带数据
+  - band_N_data.txt       --dump-band N 输出的单条能带原始数据
 """
 
 import sys
@@ -47,41 +47,30 @@ def build_k_grid(kpoints):
     return kx_vals, ky_vals, nkx, nky
 
 
-def list_bands(procar, output_dir='.'):
-    gamma_ik = 0
-    min_dist = 1e10
-    for ik in range(1, procar.nk + 1):
-        kp = procar.kpoints[ik - 1]
-        d = kp[0]**2 + kp[1]**2 + kp[2]**2
-        if d < min_dist:
-            min_dist = d
-            gamma_ik = ik
+def dump_band_data(procar, band_idx, output_dir='.'):
+    """输出指定能带沿 k 切片的原始数据 (k, E, sx, sy, sz)"""
+    kpts = procar.get_kpoints_cart()
+    idx_slice, k_scan, order = get_k_slice(kpts, procar)
 
-    print(f"\n{'Band':>6} {'E (eV)':>12} {'Occ':>8}   Note")
-    print("-" * 45)
-    rows = []
-    vbm_found = False
-    for ib in range(1, procar.nbands + 1):
-        E = procar.bands[(gamma_ik, ib)]['energy']
-        occ = procar.bands[(gamma_ik, ib)]['occ']
-        note = ''
-        if not vbm_found and occ > 0.5 and ib < procar.nbands \
-                and procar.bands[(gamma_ik, ib + 1)]['occ'] < 0.5:
-            note = '<-- VBM'
-            vbm_found = True
-        elif vbm_found and occ < 0.5 and not note:
-            note = '<-- CBM'
-            vbm_found = False
-        print(f"{ib:>6} {E:>12.4f} {occ:>8.4f}  {note}")
-        rows.append((ib, E, occ))
+    E = procar.get_band_energy(band_idx)
+    sx, sy, sz = procar.get_spin(band_idx)
 
-    path = os.path.join(output_dir, 'band_table.txt')
+    k_out = k_scan
+    E_out = E[idx_slice][order]
+    sx_out = sx[idx_slice][order]
+    sy_out = sy[idx_slice][order]
+    sz_out = sz[idx_slice][order]
+
+    path = os.path.join(output_dir, f'band_{band_idx}_data.txt')
     with open(path, 'w') as f:
-        f.write("# Band  Energy(eV)  Occupation  Note\n")
-        for ib, E, occ in rows:
-            f.write(f"{ib} {E:.6f} {occ:.6f}\n")
-    print(f"\n  [band_table.txt saved]")
-    return gamma_ik
+        f.write("# k(A^-1)  E(eV)  <sx>  <sy>  <sz>\n")
+        for i in range(len(k_out)):
+            f.write(f"{k_out[i]:.8f}  {E_out[i]:.8f}  "
+                    f"{sx_out[i]:.8f}  {sy_out[i]:.8f}  {sz_out[i]:.8f}\n")
+    print(f"\n  [Band {band_idx} data -> {path}]")
+    print(f"  Columns: k(A^-1), E(eV), <sx>, <sy>, <sz>")
+    print(f"  ({len(k_out)} k-points along slice)")
+    return True
 
 
 def get_k_slice(kpts, procar):
@@ -242,7 +231,7 @@ def main():
     k_range = 0.05
     T = 300
     output_dir = '.'
-    list_bands_only = False
+    dump_band = None
 
     i = 2
     while i < len(sys.argv):
@@ -265,8 +254,8 @@ def main():
             T = float(sys.argv[i + 1]); i += 2
         elif arg == '--output-dir' and i + 1 < len(sys.argv):
             output_dir = sys.argv[i + 1]; i += 2
-        elif arg == '--list-bands':
-            list_bands_only = True; i += 1
+        elif arg == '--dump-band' and i + 1 < len(sys.argv):
+            dump_band = int(sys.argv[i + 1]); i += 2
         else:
             i += 1
 
@@ -283,9 +272,12 @@ def main():
     procar = PROCAR(procar_file)
     procar.summary()
 
-    # ========== 输出能带表 ==========
-    list_bands(procar, output_dir)
-    if list_bands_only:
+    # ========== 输出单条能带数据 (可选) ==========
+    if dump_band is not None:
+        if 1 <= dump_band <= procar.nbands:
+            dump_band_data(procar, dump_band, output_dir)
+        else:
+            print(f"  Invalid band: {dump_band} (1-{procar.nbands})")
         sys.exit(0)
 
     kpts = procar.get_kpoints_cart()

@@ -17,8 +17,8 @@ python -m spinlife.main path/to/PROCAR
 ## Usage
 
 ```bash
-# 先看能带表，决定用哪些带
-python -m spinlife.main PROCAR --list-bands
+# 先导出某条带的 raw data，手算校验
+python -m spinlife.main PROCAR --dump-band 44
 
 # 交互式选择 SOC 带对（默认同时跑 VBM 和 CBM）
 python -m spinlife.main PROCAR
@@ -41,7 +41,7 @@ python -m spinlife.main PROCAR --vbm 44 --tau-p 0.1 --k-range 0.05 --T 300
 | `--cbm N` | CBM band index (default: auto-detect) |
 | `--soc-vbm U L` | VBM SOC pair: upper & lower bands |
 | `--soc-cbm U L` | CBM SOC pair: upper & lower bands |
-| `--list-bands` | Print band table at Γ and exit |
+| `--dump-band N` | Export band N raw data (k, E, sx, sy, sz) |
 | `--tau-p N` | Momentum scattering time τ_p (ps), default 0.1 |
 | `--k-range N` | Fitting range (Å⁻¹), default 0.05 |
 | `--T N` | Temperature (K), default 300 |
@@ -50,7 +50,7 @@ python -m spinlife.main PROCAR --vbm 44 --tau-p 0.1 --k-range 0.05 --T 300
 ## Output
 
 - Terminal report: m*, √(α²+β²), α, β, τ_s, L_PSH (VBM + CBM)
-- `band_table.txt` — Γ-point band energies for band selection
+- `band_N_data.txt` — raw data from `--dump-band N`
 - `spinlife_report.txt` — full text report
 - `spinlife_results.png` — fitting figure (dual column for VBM & CBM)
 

@@ -323,19 +323,133 @@ D'yakonov-Perel (DP) 机制主导:
 当 α ≈ β (SU(2) 对称性), τ_s 发散 → PST 的长自旋寿命特性.
 </p>
 
-<h2>四、用法示例</h2>
+<h2>四、系数计算方法详解 (与 fit_soc.py 逐行对照)</h2>
 
-<pre># 基本用法 (自动检测 VBM)
-python -m spinlife.main PROCAR
+<p>以下以 VBM band 44/SOC partner band 43 为例, 沿 ky=0 切片走完整计算流程, 方便手算验证.</p>
 
-# 指定 VBM band 和拟合参数
-python -m spinlife.main PROCAR --vbm 400 --tau-p 0.5 --k-range 0.03 --T 300
+<h3>4.1 有效质量 m*</h3>
 
-# 查看帮助
-python -m spinlife.main --help
+<p><b>抛物线拟合 (fit_soc.py 第27-49行):</b></p>
+<pre>
+E(k) ≈ E₀ + A(k-k₀)²,   A = ℏ²/(2m*)
+
+线性回归: 以 (k-k₀)² 为自变量, E(k) 为因变量
+→ 斜率 A
+
+m*/m₀ = 3.81 / |A|
 </pre>
 
-<h2>五、文件清单</h2>
+<p><b>手算步骤:</b></p>
+<ol>
+  <li>从 <code>band_44_data.txt</code> 取 Γ 点附近 (k_range 内) 的 k, E 数据</li>
+  <li>计算 <code>x = (k - k₀)²</code>, <code>y = E(k)</code></li>
+  <li>线性拟合 x-y: y = Ax + B</li>
+  <li>m* = 3.81 / |A|  (单位: m₀)</li>
+</ol>
+
+<div class="note">
+<b>注意</b>: 系数 3.81 的来源: ℏ²/(2m₀) = 3.81 eV·Å², 即 E(eV) = 3.81·k²(Å⁻²) / (m*/m₀).
+</div>
+
+<h3>4.2 √(α²+β²) 拟合</h3>
+
+<p><b>ΔE² 线性拟合 (fit_soc.py 第52-80行):</b></p>
+<p>从 SOC 劈裂的双带 (band 44 和 band 43) 出发:</p>
+<pre>
+ΔE(k) = |E_upper(k) − E_lower(k)|                    (能带劈裂)
+ΔE² = 4Δ² + 4(α²+β²)k²                               (理论)
+
+线性拟合: y = ΔE², x = k²,  y 对 x 回归:
+  slope = 4(α²+β²)
+  intercept = 4Δ²
+
+√(α²+β²) = √(slope) / 2                               (单位: eV·Å)
+Δ = √(intercept) / 2                                    (单位: eV)
+</pre>
+
+<p><b>手算步骤:</b></p>
+<ol>
+  <li>对每个 k 点: <code>dE = E_up(k) − E_lo(k)</code></li>
+  <li><code>dE² = dE × dE</code></li>
+  <li><code>k_rel = |k − k₀|</code></li>
+  <li>拟合 <code>dE²</code> vs <code>k_rel²</code> 的散点 → 直线斜率</li>
+  <li>√(α²+β²) = √(slope) / 2</li>
+</ol>
+
+<h3>4.3 α/β 比值分离</h3>
+
+<p><b>自旋织构线性拟合 (main.py 第200-220行):</b></p>
+<p>从 k·p 模型, 自旋期望值在 k→0 附近:</p>
+<pre>
+⟨σ_x⟩ ≈ 2αk/Δ        ⟨σ_y⟩ ≈ 2βk/Δ
+
+→ ⟨σ_x⟩/⟨σ_y⟩ = α/β     (k 无关!)
+</pre>
+
+<p>对自旋 vs k 做线性拟合:</p>
+<pre>
+⟨σ_x⟩(k) = slope_x · k + const_x
+⟨σ_y⟩(k) = slope_y · k + const_y
+
+ratio = slope_x / slope_y  (= α/β)
+
+α = √(α²+β²) / √(1 + 1/ratio²)
+β = α / ratio
+</pre>
+
+<p><b>手算步骤:</b></p>
+<ol>
+  <li>从 <code>band_44_data.txt</code> 取 k_range 内数据</li>
+  <li>对 ⟨σ_x⟩ vs k 线性回归 → slope_x</li>
+  <li>对 ⟨σ_y⟩ vs k 线性回归 → slope_y</li>
+  <li>ratio = slope_x / slope_y</li>
+  <li>α = √(α²+β²) / √(1 + 1/ratio²)</li>
+  <li>β = α / ratio</li>
+</ol>
+
+<div class="warn">
+<b>验证技巧</b>: 用 <code>--dump-band 44</code> 导出 raw data,
+用 Excel 或 Origin 手算 m*, slope_x, slope_y, 和程序输出对比.
+</div>
+
+<h3>4.4 自旋寿命 τ_s</h3>
+
+<p><b>DP 机制估算 (fit_soc.py 第103-158行):</b></p>
+<pre>
+α_eff = |α − β|          (单位转换: meV·Å → J·m)
+α_eff_Jm = α_eff × 1e-3 × e × 1e-10
+
+τ_s = ℏ² / (2 × m* × m₀ × α_eff_Jm² × τ_p)   (秒)
+</pre>
+
+<p><b>PSH 周期:</b></p>
+<pre>
+L_PSH = πℏ² / (m* × m₀ × |α|_Jm)              (米)
+      ≈ 2.39 / (m* × |α|_meVA)                 (μm)
+</pre>
+
+<div class="note">
+<b>物理常数</b>: ℏ = 6.582×10⁻¹⁶ eV·s, m₀ = 9.109×10⁻³¹ kg, e = 1.602×10⁻¹⁹ C.
+</div>
+
+<h2>五、用法示例</h2>
+
+<pre># 基本用法 (自动检测 VBM/CBM, 交互式选 SOC 带)
+python -m spinlife.main PROCAR
+
+# 先导出 band 44 raw data, 手算校验
+python -m spinlife.main PROCAR --dump-band 44
+
+# 命令行指定 SOC 带对 (跳过交互)
+python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 45 46
+
+# 指定参数
+python -m spinlife.main PROCAR --vbm 44 --tau-p 0.5 --k-range 0.03 --T 300
+
+# 查看帮助
+python -m spinlife.main --help</pre>
+
+<h2>六、文件清单</h2>
 
 <table>
 <tr><th>文件</th><th>说明</th></tr>
@@ -345,7 +459,7 @@ python -m spinlife.main --help
 <tr><td><code>docs/index.html</code></td><td>本文档 — PROCAR 逐行操作说明</td></tr>
 </table>
 
-<h2>六、注意事项</h2>
+<h2>七、注意事项</h2>
 <ul>
   <li><b>PROCAR 必须来自 LSORBIT 计算</b>: 否则没有 4 个自旋密度块</li>
   <li><b>k 网格必须是均匀的</b>: 目前脚本假设 k 点构成 2D 矩形网格</li>
