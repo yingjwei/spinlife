@@ -49,15 +49,23 @@ def generate_grid(center, k_range, nx, ny, nz=1):
     return kpoints
 
 
+def k_frac_to_cart(kpoints, lattice_a):
+    """将分数坐标 k 点转换为 Cartesian (Å⁻¹): k_cart = k_frac × 2π / a"""
+    k_out = kpoints.copy()
+    k_out[:, :3] *= 2.0 * np.pi / lattice_a
+    return k_out
+
+
 def write_kpoints(filename, kpoints, comment="spinlife generated",
-                  center=None, k_range=None, nx=None, ny=None, nz=None):
-    """写入 VASP KPOINTS (列表格式)."""
+                  center=None, k_range=None, nx=None, ny=None, nz=None,
+                  lattice_a=None):
+    """写入 VASP KPOINTS (列表格式, Cartesian 坐标)."""
     nk = len(kpoints)
+    coord_type = "Reciprocal"
     with open(filename, 'w') as f:
         f.write(f"{comment}\n")
-        f.write(f"  0\n")            # 0 = custom k-points
-        f.write(f"  Reciprocal\n")
-        f.write(f"  {nk}\n")
+        f.write(f"  {nk}\n")          # 第二行: k 点数 (VASP 列表格式)
+        f.write(f"  {coord_type}\n")
         for kp in kpoints:
             f.write(f"  {kp[0]:.10f}  {kp[1]:.10f}  {kp[2]:.10f}  {kp[3]:.0f}\n")
     print(f"\n  [KPOINTS -> {os.path.abspath(filename)}]  ({nk} k-points)")
@@ -66,8 +74,22 @@ def write_kpoints(filename, kpoints, comment="spinlife generated",
     if k_range is not None:
         nz_str = f" x {nz}" if nz and nz > 1 else ""
         print(f"  网格: {nx}×{ny}{nz_str}, 范围 ±{k_range}")
+    print(f"  (坐标: Reciprocal)")
     print(f"  (注意: 同名文件会被覆盖. 若 KPOINTS 已有重要内容请先备份.)")
     return nk
+
+
+def _read_a_from_poscar():
+    """从 POSCAR 读取晶格常数 a (Å)."""
+    for name in ['POSCAR', 'CONTCAR']:
+        if os.path.exists(name):
+            with open(name, 'r') as f:
+                lines = f.readlines()
+            scale = float(lines[1].strip())
+            a_vec = [float(x) * scale for x in lines[2].split()[:3]]
+            a = np.sqrt(a_vec[0]**2 + a_vec[1]**2 + a_vec[2]**2)
+            return a
+    return None
 
 
 def main():
