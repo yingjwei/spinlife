@@ -26,10 +26,11 @@ tr:hover { background: #f0f5ff; }
 <p>解析 VASP LSORBIT <code>PROCAR</code> 和 Wannier90 能带, 提取 SOC 参数 α, β, 有效质量 m*, 自旋寿命 τ<sub>s</sub>, PSH 周期 L<sub>PSH</sub> 和载流子迁移率 μ.</p>
 
 <div class="note">
-<b>交互式菜单 (默认):</b>
+<b>交互式菜单 (默认, 推荐):</b>
 <code>python -m spinlife.main</code><br>
-<b>快捷命令:</b>
-<code>python -m spinlife.main PROCAR</code> (传统模式)
+结果在模块之间自动传递: 选项 2/3/1 → 4 无需重新输入<br>
+<b>快捷命令 (向后兼容):</b>
+<code>python -m spinlife.main PROCAR</code>
 <code>python -m spinlife.main mobility</code>
 </div>
 
@@ -45,7 +46,7 @@ tr:hover { background: #f0f5ff; }
   1)  载流子迁移率 (Mobility)
   2)  有效质量 (Wannier 能带 → m*)
   3)  SOC 参数 α/β (Wannier + PROCAR)
-  4)  自旋寿命 (输入 m*, α, β, τ_p)
+  4)  自旋寿命 (结果整合 — 自动装载上下文)
   5)  导出能带数据
 
   0)  退出
@@ -53,8 +54,8 @@ tr:hover { background: #f0f5ff; }
 
 <p><b>选项 1:</b> 应变-总能量 → C₂D, E₁, μ, τ_p (x + y 双方向, 各向异性 m*)</p>
 <p><b>选项 2:</b> 读 <code>wannier90_band.dat</code> → 抛物线拟合 → m* (密 k 网格, 可靠)</p>
-<p><b>选项 3:</b> Wannier 密能带 ΔE² vs k² 拟合 → √(α²+β²); PROCAR 自旋期望平均 → α/β 比值; 结合得 α, β</p>
-<p><b>选项 4:</b> 手工输入 m*, α, β, τ_p → τ<sub>s</sub>, L<sub>PSH</sub></p>
+<p><b>选项 3:</b> Wannier 密能带 ΔE² vs k² 拟合 → √(α²+β²); PROCAR 自旋期望线性斜率拟合 → α/β 比值; 结合得 α, β</p>
+<p><b>选项 4:</b> 整合前三步结果, 自动装载已知的 m*, α, β, τ<sub>p</sub> → τ<sub>s</sub>, L<sub>PSH</sub></p>
 
 <!-- ============================================================ -->
 <h2>二、计算方法</h2>
@@ -120,7 +121,7 @@ L_PSH = πℏ² / (m* · m₀ · |α|)
       ≈ 2.39 / (m* · |α|_meVA)     (μm)
 </pre>
 
-<p>τ_s 由选项 2 (m*) 和选项 3 (α, β) 的结果作为输入计算.</p>
+<p>τ_s 由选项 2 和 3 的结果输入计算. τ_p 可直接输入, 或用 μ 反算 (τ_p = μ · m* / e).</p>
 
 <h3>2.5 载流子迁移率 μ</h3>
 
@@ -195,15 +196,21 @@ python -m spinlife.main mobility
 python /path/to/spinlife/main.py
 </pre>
 
-<h3>3.5 完整工作流建议</h3>
+<h3>3.5 完整工作流 (结果自动传递)</h3>
+
+<p>程序采用<strong>会话状态 (session context)</strong> 设计: 选项 1/2/3 的计算结果自动保存在内存中, 菜单顶部实时显示当前已知量. 进入选项 4 时, 所有已知结果自动预填入输入提示.</p>
 
 <ol>
-  <li><b>运行 PROCAR 传统模式</b> → 查看能带结构, 确认 SOC 带对</li>
-  <li><b>Wannier 有效质量</b> → 菜单选项 2, 读 <code>wannier90_band.dat</code></li>
-  <li><b>Wannier α/β</b> → 菜单选项 3, 同时需要 Wannier 能带 + PROCAR</li>
-  <li><b>迁移率</b> → 菜单选项 1, 需要 VASP 应变计算结果</li>
-  <li><b>自旋寿命</b> → 菜单选项 4, 使用上述结果输入</li>
+  <li><b>有效质量 (选项 2)</b> → 读 <code>wannier90_band.dat</code>, 存 m*</li>
+  <li><b>SOC α/β (选项 3)</b> → Wannier + PROCAR, 存 α, β</li>
+  <li><b>迁移率 (选项 1)</b> → 应变计算, 存 μ, τ_p, T</li>
+  <li><b>自旋寿命 (选项 4)</b> → 自动装载上述所有结果, 一键算出 τ<sub>s</sub>, L<sub>PSH</sub></li>
 </ol>
+
+<div class="note">
+<b>可选:</b> 也可只运行部分步骤, 选项 4 自动识别缺失项并要求手工输入.
+例如只做了 Wannier m* 和 SOC α/β, τ_p 可以在选项 4 中直接输入或通过 μ 反算.
+</div>
 
 <h3>3.6 输入输出文件</h3>
 

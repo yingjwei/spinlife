@@ -38,7 +38,8 @@ except ImportError:
 from spinlife.read_procar import PROCAR
 from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
 from spinlife.mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
-                                             calc_mu, C2D_Jm2_from_d2E)
+                                             calc_mu, C2D_Jm2_from_d2E,
+                                             m0, e_ch)
 from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice
 
 
@@ -207,6 +208,33 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     return res
 
 
+# 会话共享状态 — 各模块计算结果自动传递
+_ctx = {
+    'm_star': None,          # 有效质量 (m₀)
+    'alpha_meva': None,      # α (meV·Å)
+    'beta_meva': None,       # β (meV·Å)
+    'tau_p': None,           # 动量散射时间 (ps)
+    'mu': None,              # 迁移率 (cm²/V·s)
+    'T': 300,                # 温度 (K)
+}
+
+
+def _ctx_summary():
+    """当前工作区状态摘要"""
+    parts = []
+    if _ctx['m_star']:
+        parts.append(f"m* = {_ctx['m_star']:.4f} m0")
+    if _ctx['alpha_meva']:
+        parts.append(f"a = {_ctx['alpha_meva']:.2f} meV.A")
+    if _ctx['beta_meva']:
+        parts.append(f"b = {_ctx['beta_meva']:.2f} meV.A")
+    if _ctx['tau_p']:
+        parts.append(f"tau_p = {_ctx['tau_p']:.4f} ps")
+    if _ctx['mu']:
+        parts.append(f"mu = {_ctx['mu']:.2f} cm2/V.s")
+    return "  |  ".join(parts) if parts else None
+
+
 def _show_band_table(procar, center, label, n_range=5):
     """vaspkit-style: 显示中心能带附近列表"""
     print(f"\n  {label} 附近能带:")
@@ -220,7 +248,7 @@ def _show_band_table(procar, center, label, n_range=5):
 
 
 def _show_main_menu():
-    """显示主菜单"""
+    """显示主菜单 (含当前结果状态)"""
     print()
     print("=" * 65)
     print("  spinlife — VASP 自旋寿命 + 载流子迁移率计算")
@@ -229,8 +257,12 @@ def _show_main_menu():
     print("  1)  载流子迁移率 (Mobility)")
     print("  2)  有效质量 (Wannier 能带 → m*)")
     print("  3)  SOC 参数 α/β (Wannier + PROCAR)")
-    print("  4)  自旋寿命 (输入 m*, α, β, τ_p)")
+    print("  4)  自旋寿命 (τ_s, L_PSH)")
     print("  5)  导出能带数据")
+    print()
+    summary = _ctx_summary()
+    if summary:
+        print(f"  [{summary}]")
     print()
     print("  0)  退出")
     print()
@@ -559,11 +591,13 @@ def main_mobility():
 
         # --- 有效质量 (各向异性) ---
         m_vbm, m_cbm = None, None
+        mstar_ctx = _ctx.get('m_star')
+        mstar_hint = f" [Wannier: {mstar_ctx:.4f}]" if mstar_ctx else ""
         try:
             if E1_vbm is not None:
-                m_vbm = float(input(f"\n  -->> m* (VBM, {dir_label}方向, m0): "))
+                m_vbm = float(input(f"\n  -->> m* (VBM, {dir_label}方向, m0){mstar_hint}: "))
             if E1_cbm is not None:
-                m_cbm = float(input(f"  -->> m* (CBM, {dir_label}方向, m0): "))
+                m_cbm = float(input(f"  -->> m* (CBM, {dir_label}方向, m0){mstar_hint}: "))
         except (EOFError, KeyboardInterrupt):
             pass
 
@@ -595,10 +629,16 @@ def main_mobility():
         if dat['E1_vbm'] and dat['m_vbm'] and dat['C2D']:
             mu_h, tau_h = calc_mu(dat['C2D'], dat['E1_vbm'], dat['m_vbm'], T)
             dat['mu_h'], dat['tau_h'] = mu_h, tau_h
+            _ctx['mu'] = mu_h
+            _ctx['tau_p'] = tau_h
+            _ctx['T'] = T
             print(f"  空穴 (VBM): μ = {mu_h:.2f} cm^2/V.s,  τ_p = {tau_h:.4f} ps")
         if dat['E1_cbm'] and dat['m_cbm'] and dat['C2D']:
             mu_e, tau_e = calc_mu(dat['C2D'], dat['E1_cbm'], dat['m_cbm'], T)
             dat['mu_e'], dat['tau_e'] = mu_e, tau_e
+            _ctx['mu'] = mu_e
+            _ctx['tau_p'] = tau_e
+            _ctx['T'] = T
             print(f"  电子 (CBM): μ = {mu_e:.2f} cm^2/V.s,  τ_p = {tau_e:.4f} ps")
 
     # --- 对比表 ---
@@ -755,6 +795,7 @@ def main_effmass_wannier():
     m_star, r2, n_pts = fit_effmass(k_slice, e_slice, k0, kr)
     if m_star:
         print(f"\n  m* = {m_star:.4f} m₀  (R² = {r2:.6f},  {n_pts} pts)")
+        _ctx['m_star'] = m_star
         with open('effmass_report.txt', 'w') as f:
             f.write("Effective Mass Report (Wannier)\n")
             f.write(f"File: {path}\n")
@@ -886,10 +927,12 @@ def main_alpha_beta():
     if sqrt_ab and ratio and abs(ratio) > 1e-6:
         alpha = sqrt_ab / np.sqrt(1 + 1 / ratio**2)
         beta = alpha / ratio
+        _ctx['alpha_meva'] = alpha * 1000
+        _ctx['beta_meva'] = beta * 1000
         print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
         print(f"  α/β     = {ratio:.4f}")
-        print(f"  α       = {alpha*1000:.2f} meV·Å")
-        print(f"  β       = {beta*1000:.2f} meV·Å")
+        print(f"  α       = {_ctx['alpha_meva']:.2f} meV·Å")
+        print(f"  β       = {_ctx['beta_meva']:.2f} meV·Å")
         with open('soc_report.txt', 'w') as f:
             f.write("SOC Parameter Report\n")
             f.write(f"sqrt(a^2+b^2) = {sqrt_ab*1000:.2f} meV.A\n")
@@ -906,28 +949,111 @@ def main_alpha_beta():
 
 
 def main_spin_lifetime_menu():
-    """自旋寿命: 手动输入 m*, α, β, τ_p → τ_s, L_PSH"""
+    """自旋寿命: 自动装载上下文结果, 输入不足的, 即算即得"""
     print()
     print("=" * 65)
     print("  自旋寿命 (Spin lifetime τ_s)")
     print("=" * 65)
     print()
     print("  τ_s = ℏ² / (2 · m* · m₀ · α_eff² · τ_p)")
+    print("  τ_p = μ · m* / e   (μ 反算)")
     print()
 
+    ctx = _ctx
+    # 收集缺失的输入: m*, α, β, τ_p
+    # 若有 μ 则反算 τ_p; 若均缺则手工输入
+    # 最终自动计算 τ_s, L_PSH
+
+    # --- 1. 有效质量 m* ---
+    m_star = ctx['m_star']
+    m_star_src = "Wannier" if m_star else None
+    if m_star:
+        print(f"  [来自 {m_star_src}] m* = {m_star:.4f} m₀")
     try:
-        m_star = float(input("  -->> m* (m₀): ") or "0")
-        alpha_meva = float(input("  -->> α (meV·Å): ") or "0")
-        beta_meva = float(input("  -->> β (meV·Å): ") or "0")
-        tau_p = float(input("  -->> τ_p (ps) [0.1]: ") or 0.1)
-        T = float(input("  -->> T (K) [300]: ") or 300)
+        inp = input(f"  -->> m* (m₀) [{m_star or ''}]: ").strip()
     except (EOFError, KeyboardInterrupt):
-        print("  [输入取消]")
+        inp = ""
+    if inp:
+        m_star = float(inp)
+        if not ctx['m_star']:
+            ctx['m_star'] = m_star
+    elif m_star is None:
+        print("  [需要 m*, 请先运行选项 2 或手工输入]")
         return
 
-    alpha = alpha_meva * 1e-3
-    beta = beta_meva * 1e-3
-    result = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
+    # --- 2. α, β ---
+    alpha = ctx['alpha_meva']
+    beta = ctx['beta_meva']
+    if alpha and beta:
+        print(f"  [来自 SOC 计算] α = {alpha:.2f}, β = {beta:.2f} meV·Å")
+    try:
+        inp_a = input(f"  -->> α (meV·Å) [{alpha or ''}]: ").strip()
+        inp_b = input(f"  -->> β (meV·Å) [{beta or ''}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        inp_a = inp_b = ""
+    if inp_a:
+        alpha = float(inp_a)
+    if inp_b:
+        beta = float(inp_b)
+    if alpha is None or beta is None:
+        print("  [需要 α, β, 请先运行选项 3]")
+        return
+    # 同步回 ctx
+    if not ctx['alpha_meva'] and alpha:
+        ctx['alpha_meva'] = alpha
+    if not ctx['beta_meva'] and beta:
+        ctx['beta_meva'] = beta
+
+    # --- 3. τ_p (直接输入 或 从 μ 反算) ---
+    tau_p = ctx['tau_p']
+    mu = ctx['mu']
+    if tau_p:
+        print(f"  [来自迁移率] τ_p = {tau_p:.4f} ps")
+    elif mu:
+        print(f"  [来自迁移率] μ = {mu:.2f} cm²/V·s → 可反算 τ_p")
+
+    try:
+        inp_t = input(f"  -->> τ_p (ps) [留空用 μ 反算 / {tau_p or ''}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        inp_t = ""
+    if inp_t:
+        tau_p = float(inp_t)
+    elif tau_p is None and mu:
+        # 反算 τ_p = μ · m* / e
+        m_kg = m_star * m0
+        tau_p = mu * 1e-4 * m_kg / e_ch * 1e12
+        print(f"  → τ_p = {tau_p:.4f} ps  (由 μ = {mu:.2f} cm²/V·s 反算)")
+    elif tau_p is None:
+        try:
+            inp_mu = input(f"  -->> μ (cm²/V·s) [反算 τ_p]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            inp_mu = ""
+        if inp_mu:
+            mu = float(inp_mu)
+            m_kg = m_star * m0
+            tau_p = mu * 1e-4 * m_kg / e_ch * 1e12
+            print(f"  → τ_p = {tau_p:.4f} ps  (由 μ = {mu:.2f} cm²/V·s 反算)")
+            ctx['mu'] = mu
+        else:
+            print("  [需要 τ_p 或 μ]")
+            return
+    if tau_p:
+        ctx['tau_p'] = tau_p
+
+    # --- 4. 温度 ---
+    T = ctx.get('T', 300)
+    try:
+        inp_T = input(f"  -->> T (K) [{T}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        inp_T = ""
+    if inp_T:
+        T = float(inp_T)
+        ctx['T'] = T
+
+    # --- 5. 计算 ---
+    alpha_eV = alpha * 1e-3
+    beta_eV = beta * 1e-3
+    result = calc_spin_lifetime(alpha_eV, beta_eV, m_star, tau_p, T)
 
     if result:
         print(f"\n  α_eff = {result['alpha_eff_meva']:.2f} meV·Å")
@@ -936,8 +1062,8 @@ def main_spin_lifetime_menu():
         with open('spinlife_report.txt', 'w') as f:
             f.write("Spin Lifetime Report\n")
             f.write(f"m*     = {m_star:.4f} m0\n")
-            f.write(f"alpha  = {alpha_meva:.2f} meV.A\n")
-            f.write(f"beta   = {beta_meva:.2f} meV.A\n")
+            f.write(f"alpha  = {alpha:.2f} meV.A\n")
+            f.write(f"beta   = {beta:.2f} meV.A\n")
             f.write(f"tau_p  = {tau_p:.2f} ps\n")
             f.write(f"T      = {T} K\n")
             f.write(f"tau_s  = {result['tau_s_ps']:.2f} ps\n")
