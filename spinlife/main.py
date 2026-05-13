@@ -774,7 +774,7 @@ def main_alpha_beta():
     print("=" * 65)
     print()
     print("  方法: Wannier 密能带拟合 → √(α²+β²)")
-    print("        PROCAR 自旋期望平均值 → α/β 比值 (无需拟合)")
+    print("        PROCAR 自旋织构斜率拟合 → α/β 比值")
     print()
 
     # ---- Part 1: √(α²+β²) from Wannier ----
@@ -807,35 +807,76 @@ def main_alpha_beta():
     elif path:
         print("  [文件不存在]")
 
-    # ---- Part 2: α/β ratio from PROCAR ----
+    # ---- Part 2: α/β ratio from PROCAR (斜率拟合, 非点对点平均) ----
     ratio = None
     procar_path = input("\n  -->> PROCAR 路径 (留空跳过): ").strip()
     if procar_path and os.path.exists(procar_path):
-        print("\n  [2/2] α/β 比值 — PROCAR 自旋期望 (无需拟合)")
+        print("\n  [2/2] α/β 比值 — PROCAR 自旋织构斜率拟合")
+        print("  方法: ⟨σ_x⟩ = A·k,  ⟨σ_y⟩ = B·k  →  α/β = A/B")
+        print()
         procar = PROCAR(procar_path)
         kpts = procar.get_kpoints_cart()
-        # k 点按距 Γ 排序
-        order = np.argsort(np.sum(kpts**2, axis=1))
-        near_gamma = order[:min(5, procar.nk)]
 
-        up = int(input(f"  SOC 带对上能带 (1-{procar.nbands}): "))
-        lo = int(input(f"  SOC 带对下能带 (1-{procar.nbands}): "))
+        up = int(input(f"  -->> SOC 带对上能带 (1-{procar.nbands}): "))
+        lo = int(input(f"  -->> SOC 带对下能带 (1-{procar.nbands}): "))
 
         sx_up, sy_up, _ = procar.get_spin(up)
         sx_lo, sy_lo, _ = procar.get_spin(lo)
 
-        r_vals = []
-        for idx in near_gamma:
-            if abs(sy_up[idx]) > 1e-10:
-                r_vals.append(sx_up[idx] / sy_up[idx])
-            if abs(sy_lo[idx]) > 1e-10:
-                r_vals.append(sx_lo[idx] / sy_lo[idx])
+        # 沿 ky≈0 切片 (Γ-X 方向)
+        idx_slice, k_scan, order = get_k_slice(kpts, procar)
+        k0 = k_scan[np.argmin(np.abs(k_scan))]
 
-        if r_vals:
-            ratio = float(np.mean(r_vals))
-            print(f"  ⟨σ_x⟩/⟨σ_y⟩ 平均 = {ratio:.4f}  ({len(r_vals)} 个 k 点)")
-        else:
-            print("  [无法计算比值, ⟨σ_y⟩ 过小]")
+        try:
+            kr = float(input("  -->> 拟合范围 ±Δk (Å⁻¹) [0.05]: ") or 0.05)
+        except (EOFError, KeyboardInterrupt):
+            kr = 0.05
+
+        near = (np.abs(k_scan - k0) <= kr) & (np.abs(k_scan - k0) > 1e-10)
+        kn = k_scan[near] - k0
+
+        # 排序后的切片自旋数据
+        sx_up_s = sx_up[idx_slice][order]
+        sy_up_s = sy_up[idx_slice][order]
+        sx_lo_s = sx_lo[idx_slice][order]
+        sy_lo_s = sy_lo[idx_slice][order]
+
+        # 显示数据表
+        print(f"\n  {'k (Å⁻¹)':>10}  {'⟨σ_x⟩':>10}  {'⟨σ_y⟩':>10}  {'⟨σ_x⟩/⟨σ_y⟩':>12}")
+        print(f"  {'-'*46}")
+        for i in range(len(k_scan)):
+            if near[i]:
+                r_str = f"{sx_up_s[i]/sy_up_s[i]:.2f}" if abs(sy_up_s[i]) > 1e-10 else "-"
+                print(f"  {k_scan[i]:>10.4f}  {sx_up_s[i]:>10.4f}  "
+                      f"{sy_up_s[i]:>10.4f}  {r_str:>12}")
+
+        # 对上下带分别做斜率拟合, 取 R² 更高者
+        best_ratio = None
+        best_r2 = -1
+        for label, sx_s, sy_s in [
+            (f"Band {up}", sx_up_s, sy_up_s),
+            (f"Band {lo}", sx_lo_s, sy_lo_s),
+        ]:
+            if np.sum(near) < 3:
+                continue
+            p_x = np.polyfit(kn, sx_s[near], 1)
+            p_y = np.polyfit(kn, sy_s[near], 1)
+            sx_fit = np.polyval(p_x, kn)
+            sy_fit = np.polyval(p_y, kn)
+            r2_x = 1 - np.sum((sx_s[near] - sx_fit)**2) / max(np.sum((sx_s[near] - np.mean(sx_s[near]))**2), 1e-30)
+            r2_y = 1 - np.sum((sy_s[near] - sy_fit)**2) / max(np.sum((sy_s[near] - np.mean(sy_s[near]))**2), 1e-30)
+            r2_avg = (r2_x + r2_y) / 2
+            if abs(p_y[0]) > 1e-10:
+                r = p_x[0] / p_y[0]
+                print(f"\n  {label}:  ⟨σ_x⟩ slope = {p_x[0]:.4f},  ⟨σ_y⟩ slope = {p_y[0]:.4f}")
+                print(f"           α/β = {r:.4f}  (R²_x={r2_x:.3f}, R²_y={r2_y:.3f})")
+                if r2_avg > best_r2:
+                    best_r2 = r2_avg
+                    best_ratio = r
+
+        if best_ratio is not None:
+            ratio = best_ratio
+            print(f"\n  → α/β = {ratio:.4f}  (取最优拟合)")
 
     # ---- Part 3: Combine ----
     print()
