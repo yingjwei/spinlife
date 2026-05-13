@@ -39,6 +39,7 @@ from spinlife.read_procar import PROCAR
 from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
 from spinlife.mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
                                              calc_mu, C2D_Jm2_from_d2E)
+from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice
 
 
 def build_k_grid(kpoints):
@@ -218,21 +219,73 @@ def _show_band_table(procar, center, label, n_range=5):
         print(f"  {b:>6}  {e:>12.4f}  {tag}")
 
 
+def _show_main_menu():
+    """显示主菜单"""
+    print()
+    print("=" * 65)
+    print("  spinlife — VASP 自旋寿命 + 载流子迁移率计算")
+    print("=" * 65)
+    print()
+    print("  1)  载流子迁移率 (Mobility)")
+    print("  2)  有效质量 (Wannier 能带 → m*)")
+    print("  3)  SOC 参数 α/β (Wannier + PROCAR)")
+    print("  4)  自旋寿命 (输入 m*, α, β, τ_p)")
+    print("  5)  导出能带数据")
+    print()
+    print("  0)  退出")
+    print()
+
+
+def _interactive_menu():
+    """全功能交互式菜单循环"""
+    while True:
+        _show_main_menu()
+        try:
+            c = input("  -->> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if c == '0':
+            break
+        elif c == '1':
+            main_mobility()
+        elif c == '2':
+            main_effmass_wannier()
+        elif c == '3':
+            main_alpha_beta()
+        elif c == '4':
+            main_spin_lifetime_menu()
+        elif c == '5':
+            main_dump_band_menu()
+        else:
+            print("  [无效选项]")
+            continue
+        if c in ('1', '2', '3', '4', '5'):
+            input("\n  -->> 按 Enter 返回菜单...")
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
-        print(__doc__)
-        sys.exit(0 if len(sys.argv) < 2 else 1)
+    """入口: 菜单 / CLI 快捷模式"""
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        if arg in ('-h', '--help'):
+            print(__doc__)
+            return
+        if arg == 'mobility':
+            main_mobility()
+            return
+        # PROCAR 传统模式 (向后兼容)
+        procar_file = sys.argv[1] if os.path.exists(sys.argv[1]) else None
+        if procar_file:
+            _procar_cli_flow()
+            return
+    # 交互式菜单 (默认)
+    _interactive_menu()
 
-    if sys.argv[1] == 'mobility':
-        main_mobility()
-        return
 
-    procar_file = sys.argv[1] if os.path.exists(sys.argv[1]) else None
-    if not procar_file:
-        print(f"File not found: {sys.argv[1]}")
-        sys.exit(1)
+def _procar_cli_flow():
+    """PROCAR CLI 传统分析 (向后兼容, 读 VASP PROCAR → m* + α/β + τ_s)"""
+    procar_file = sys.argv[1]
 
-    # --- 解析参数 ---
     vbm_band = None
     cbm_band = None
     soc_vbm_up = soc_vbm_lo = None
@@ -282,7 +335,6 @@ def main():
     procar = PROCAR(procar_file)
     procar.summary()
 
-    # ========== 输出单条能带数据 (可选) ==========
     if dump_band is not None:
         if 1 <= dump_band <= procar.nbands:
             dump_band_data(procar, dump_band, output_dir)
@@ -293,7 +345,6 @@ def main():
     kpts = procar.get_kpoints_cart()
     _, _, nkx, nky = build_k_grid(procar.kpoints)
 
-    # 检测 VBM/CBM
     vbm, cbm = procar.find_vbm_cbm()
     if vbm_band is not None:
         vbm = vbm_band; cbm = vbm + 1
@@ -301,7 +352,6 @@ def main():
         cbm = cbm_band; vbm = cbm - 1
     print(f"\n  VBM: band {vbm}, CBM: band {cbm}")
 
-    # ========== k 切片 ==========
     idx_slice, k_scan, order = get_k_slice(kpts, procar)
     if len(idx_slice) < 3:
         idx_slice = list(range(procar.nk))
@@ -309,7 +359,6 @@ def main():
         order = np.argsort(k_scan)
         k_scan = k_scan[order]
 
-    # ========== SOC 能带选择 (vaspkit 风格交互式) ==========
     if soc_vbm_up is None:
         print()
         print("=" * 65)
@@ -325,21 +374,16 @@ def main():
         soc_cbm_up = int(input("  -->> CBM SOC upper band: ") or cbm)
         soc_cbm_lo = int(input("  -->> CBM SOC lower band: ") or min(cbm + 1, procar.nbands))
 
-    # ========== VBM 拟合 ==========
     res_vbm = run_soc_fit(
         'VBM', procar, kpts, idx_slice, k_scan, order,
         mstar_band=soc_vbm_up, soc_upper=soc_vbm_up, soc_lower=soc_vbm_lo,
         tau_p=tau_p, T=T, k_range=k_range, extrema_type='max')
-
-    # ========== CBM 拟合 ==========
     res_cbm = run_soc_fit(
         'CBM', procar, kpts, idx_slice, k_scan, order,
         mstar_band=soc_cbm_up, soc_upper=soc_cbm_up, soc_lower=soc_cbm_lo,
         tau_p=tau_p, T=T, k_range=k_range, extrema_type='min')
-
     results = [res_vbm, res_cbm]
 
-    # ========== 绘图 ==========
     if _HAS_MPL:
         valid = [r for r in results if r.get('k_scan') is not None]
         ncol = len(valid)
@@ -348,46 +392,35 @@ def main():
             if ncol == 1:
                 axes = axes.reshape(2, 1)
             fig.suptitle('spinlife -- SOC Fitting Results', fontsize=13)
-
             for col, res in enumerate(valid):
                 ks = res['k_scan']
                 up, lo = res['bands']
                 k0 = res['k0']
                 akr = res['auto_k_range']
-                E_us = res['E_up_scan']
-                E_ls = res['E_lo_scan']
-
-                ax = axes[0, col]
-                ax.plot(ks, E_us * 1000, 'o-', ms=4, label=f'Band {up}')
-                ax.plot(ks, E_ls * 1000, 's-', ms=4, label=f'Band {lo}')
-                ax.axvspan(k0 - akr, k0 + akr, alpha=0.08, color='blue')
-                ax.axvline(k0, color='gray', ls='--', alpha=0.5)
-                ax.set_xlabel('k (A^-1)')
-                ax.set_ylabel('E (meV)')
-                ax.legend(fontsize=9)
-                ax.set_title(f'{res["label"]}: SOC-split Bands')
-
-                ax = axes[1, col]
+                E_us = res['E_up_scan']; E_ls = res['E_lo_scan']
+                axes[0, col].plot(ks, E_us * 1000, 'o-', ms=4, label=f'Band {up}')
+                axes[0, col].plot(ks, E_ls * 1000, 's-', ms=4, label=f'Band {lo}')
+                axes[0, col].axvspan(k0 - akr, k0 + akr, alpha=0.08, color='blue')
+                axes[0, col].axvline(k0, color='gray', ls='--', alpha=0.5)
+                axes[0, col].set_xlabel('k (A^-1)'); axes[0, col].set_ylabel('E (meV)')
+                axes[0, col].legend(fontsize=9)
+                axes[0, col].set_title(f'{res["label"]}: SOC-split Bands')
                 dE = np.abs(E_us - E_ls) * 1000
                 x = (ks - k0)**2
-                ax.plot(x, dE**2, 'o', ms=5)
+                axes[1, col].plot(x, dE**2, 'o', ms=5)
                 if res.get('ab_norm'):
-                    coeffs = np.polyfit(x, dE**2, 1)
+                    c2 = np.polyfit(x, dE**2, 1)
                     xs = np.linspace(0, max(x) * 1.05, 100)
-                    label = rf'$(\alpha^2+\beta^2)k^2$ fit'
-                    ax.plot(xs, coeffs[0] * xs + coeffs[1], '-', label=label)
-                ax.set_xlabel('(k-k0)^2 (A^-2)')
-                ax.set_ylabel(r'$\Delta E^2$ (meV$^2$)')
-                ax.legend(fontsize=9)
-                ax.set_title(f'{res["label"]}: DE^2 Fit')
-
+                    axes[1, col].plot(xs, c2[0] * xs + c2[1], '-', label=r'$(\alpha^2+\beta^2)k^2$ fit')
+                axes[1, col].set_xlabel('(k-k0)^2 (A^-2)'); axes[1, col].set_ylabel(r'$\Delta E^2$ (meV$^2$)')
+                axes[1, col].legend(fontsize=9)
+                axes[1, col].set_title(f'{res["label"]}: DE^2 Fit')
             plt.tight_layout()
             out_png = os.path.join(output_dir, 'spinlife_results.png')
             plt.savefig(out_png, dpi=200, bbox_inches='tight')
             plt.close()
             print(f"\n  [Plot: {out_png}]")
 
-    # ========== 报告 ==========
     report_path = os.path.join(output_dir, 'spinlife_report.txt')
     with open(report_path, 'w') as f:
         f.write("spinlife -- VASP Spin Lifetime Report\n")
@@ -398,7 +431,6 @@ def main():
         f.write(f"VBM   : band {vbm}\n")
         f.write(f"CBM   : band {cbm}\n")
         f.write(f"k grid: {nkx}x{nky}\n\n")
-
         for res in results:
             up, lo = res['bands']
             f.write(f"--- {res['label']}: band {up}/{lo} ---\n")
@@ -416,7 +448,6 @@ def main():
                 f.write(f"tau_s  = {s['tau_s_ps']:.2f} ps\n")
                 f.write(f"L_PSH  = {s['L_PSH_um']:.2f} um\n")
             f.write("\n")
-
     print(f"\n  [Report: {report_path}]")
     print("=" * 65)
 
@@ -673,6 +704,244 @@ def main_mobility():
             f.write("\n")
     print(f"\n  [Report: mobility_report.txt]")
     print("=" * 65)
+
+
+def main_effmass_wannier():
+    """有效质量: 读 Wannier 能带 → 抛物线拟合 → m*"""
+    print()
+    print("=" * 65)
+    print("  有效质量 (Effective mass from Wannier bands)")
+    print("=" * 65)
+
+    path = input("\n  -->> Wannier 能带文件路径 (wannier90_band.dat): ").strip()
+    if not path or not os.path.exists(path):
+        print("  [文件不存在]")
+        return
+
+    k_frac, energies, nk, nbands = read_bands(path)
+    print(f"  能带范围: 1 - {nbands},  k 点数: {nk}")
+
+    a = float(input("  -->> 晶格常数 a (Å): ").strip())
+    k = k_to_reciprocal(k_frac, a)
+
+    # 显示参考能带
+    mid = nk // 2
+    print(f"\n  路径中点能带 (用于参考):")
+    print(f"  {'Band':>6}  {'Energy(eV)':>12}")
+    print(f"  {'-'*22}")
+    low = max(0, nbands // 2 - 6)
+    high = min(nbands, nbands // 2 + 7)
+    for b in range(low, high):
+        print(f"  {b+1:>6}  {energies[mid, b]:>12.4f}")
+
+    band = int(input(f"\n  -->> 能带序号 (1-{nbands}): ")) - 1
+    mode = input("  -->> 极值类型 (VBM/CBM): ").strip().upper()
+    mode = 'max' if mode == 'VBM' else 'min'
+
+    energy = energies[:, band]
+    k0, idx0 = find_extremum(k, energy, mode)
+    print(f"  极值: k₀ = {k0:.4f} Å⁻¹,  E₀ = {energy[idx0]:.4f} eV")
+
+    try:
+        kr = float(input("  -->> 拟合范围 ±Δk (Å⁻¹) [0.05]: ") or 0.05)
+    except (EOFError, KeyboardInterrupt):
+        kr = 0.05
+
+    k_slice, e_slice = band_slice(k, energy - energy[idx0], k0, kr)
+    if len(k_slice) < 3:
+        print(f"  [范围仅有 {len(k_slice)} 个 k 点, 无法拟合]")
+        return
+
+    m_star, r2, n_pts = fit_effmass(k_slice, e_slice, k0, kr)
+    if m_star:
+        print(f"\n  m* = {m_star:.4f} m₀  (R² = {r2:.6f},  {n_pts} pts)")
+        with open('effmass_report.txt', 'w') as f:
+            f.write("Effective Mass Report (Wannier)\n")
+            f.write(f"File: {path}\n")
+            f.write(f"Band: {band+1}\n")
+            f.write(f"m* = {m_star:.4f} m₀\n")
+            f.write(f"R² = {r2:.6f}\n")
+        print(f"  [报告 -> effmass_report.txt]")
+    else:
+        print("  [拟合失败]")
+
+
+def main_alpha_beta():
+    """SOC α/β: Wannier ΔE² 拟合 → √(α²+β²), PROCAR 自旋 → α/β 比值"""
+    print()
+    print("=" * 65)
+    print("  SOC 参数 α/β 计算")
+    print("=" * 65)
+    print()
+    print("  方法: Wannier 密能带拟合 → √(α²+β²)")
+    print("        PROCAR 自旋期望平均值 → α/β 比值 (无需拟合)")
+    print()
+
+    # ---- Part 1: √(α²+β²) from Wannier ----
+    sqrt_ab = None
+    path = input("  -->> Wannier 能带文件路径 (留空跳过): ").strip()
+    if path and os.path.exists(path):
+        print("\n  [1/2] √(α²+β²) — Wannier SOC 能带拟合")
+        k_frac, energies, nk, nbands = read_bands(path)
+        a = float(input("  -->> 晶格常数 a (Å): "))
+        k = k_to_reciprocal(k_frac, a)
+
+        up = int(input(f"  -->> SOC 带对上能带 (1-{nbands}): ")) - 1
+        lo = int(input(f"  -->> SOC 带对下能带 (1-{nbands}): ")) - 1
+        E_up = energies[:, up]
+        E_lo = energies[:, lo]
+
+        # k0 at minimum SOC splitting
+        dE = np.abs(E_up - E_lo)
+        k0 = k[np.argmin(dE)]
+        try:
+            kr = float(input("  -->> 拟合范围 ±Δk (Å⁻¹) [0.05]: ") or 0.05)
+        except (EOFError, KeyboardInterrupt):
+            kr = 0.05
+
+        ab_norm, Delta, r2 = fit_alpha_beta(k, E_up, E_lo, k0, kr)
+        if ab_norm:
+            sqrt_ab = ab_norm
+            print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
+            print(f"  Δ       = {Delta*1000:.2f} meV  (R² = {r2:.4f})")
+    elif path:
+        print("  [文件不存在]")
+
+    # ---- Part 2: α/β ratio from PROCAR ----
+    ratio = None
+    procar_path = input("\n  -->> PROCAR 路径 (留空跳过): ").strip()
+    if procar_path and os.path.exists(procar_path):
+        print("\n  [2/2] α/β 比值 — PROCAR 自旋期望 (无需拟合)")
+        procar = PROCAR(procar_path)
+        kpts = procar.get_kpoints_cart()
+        # k 点按距 Γ 排序
+        order = np.argsort(np.sum(kpts**2, axis=1))
+        near_gamma = order[:min(5, procar.nk)]
+
+        up = int(input(f"  SOC 带对上能带 (1-{procar.nbands}): "))
+        lo = int(input(f"  SOC 带对下能带 (1-{procar.nbands}): "))
+
+        sx_up, sy_up, _ = procar.get_spin(up)
+        sx_lo, sy_lo, _ = procar.get_spin(lo)
+
+        r_vals = []
+        for idx in near_gamma:
+            if abs(sy_up[idx]) > 1e-10:
+                r_vals.append(sx_up[idx] / sy_up[idx])
+            if abs(sy_lo[idx]) > 1e-10:
+                r_vals.append(sx_lo[idx] / sy_lo[idx])
+
+        if r_vals:
+            ratio = float(np.mean(r_vals))
+            print(f"  ⟨σ_x⟩/⟨σ_y⟩ 平均 = {ratio:.4f}  ({len(r_vals)} 个 k 点)")
+        else:
+            print("  [无法计算比值, ⟨σ_y⟩ 过小]")
+
+    # ---- Part 3: Combine ----
+    print()
+    print("=" * 65)
+    print("  Result")
+    print("=" * 65)
+    if sqrt_ab and ratio and abs(ratio) > 1e-6:
+        alpha = sqrt_ab / np.sqrt(1 + 1 / ratio**2)
+        beta = alpha / ratio
+        print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
+        print(f"  α/β     = {ratio:.4f}")
+        print(f"  α       = {alpha*1000:.2f} meV·Å")
+        print(f"  β       = {beta*1000:.2f} meV·Å")
+        with open('soc_report.txt', 'w') as f:
+            f.write("SOC Parameter Report\n")
+            f.write(f"sqrt(a^2+b^2) = {sqrt_ab*1000:.2f} meV.A\n")
+            f.write(f"alpha/beta    = {ratio:.4f}\n")
+            f.write(f"alpha         = {alpha*1000:.2f} meV.A\n")
+            f.write(f"beta          = {beta*1000:.2f} meV.A\n")
+        print(f"  [报告 -> soc_report.txt]")
+    elif sqrt_ab and not ratio:
+        print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
+        print("  (缺少 α/β 比值, 需运行 PROCAR 部分)")
+    elif not sqrt_ab and ratio:
+        print(f"\n  α/β = {ratio:.4f}")
+        print("  (缺少 √(α²+β²), 需运行 Wannier 部分)")
+
+
+def main_spin_lifetime_menu():
+    """自旋寿命: 手动输入 m*, α, β, τ_p → τ_s, L_PSH"""
+    print()
+    print("=" * 65)
+    print("  自旋寿命 (Spin lifetime τ_s)")
+    print("=" * 65)
+    print()
+    print("  τ_s = ℏ² / (2 · m* · m₀ · α_eff² · τ_p)")
+    print()
+
+    try:
+        m_star = float(input("  -->> m* (m₀): ") or "0")
+        alpha_meva = float(input("  -->> α (meV·Å): ") or "0")
+        beta_meva = float(input("  -->> β (meV·Å): ") or "0")
+        tau_p = float(input("  -->> τ_p (ps) [0.1]: ") or 0.1)
+        T = float(input("  -->> T (K) [300]: ") or 300)
+    except (EOFError, KeyboardInterrupt):
+        print("  [输入取消]")
+        return
+
+    alpha = alpha_meva * 1e-3
+    beta = beta_meva * 1e-3
+    result = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
+
+    if result:
+        print(f"\n  α_eff = {result['alpha_eff_meva']:.2f} meV·Å")
+        print(f"  τ_s   = {result['tau_s_ps']:.2f} ps")
+        print(f"  L_PSH = {result['L_PSH_um']:.2f} μm")
+        with open('spinlife_report.txt', 'w') as f:
+            f.write("Spin Lifetime Report\n")
+            f.write(f"m*     = {m_star:.4f} m0\n")
+            f.write(f"alpha  = {alpha_meva:.2f} meV.A\n")
+            f.write(f"beta   = {beta_meva:.2f} meV.A\n")
+            f.write(f"tau_p  = {tau_p:.2f} ps\n")
+            f.write(f"T      = {T} K\n")
+            f.write(f"tau_s  = {result['tau_s_ps']:.2f} ps\n")
+            f.write(f"L_PSH  = {result['L_PSH_um']:.2f} um\n")
+        print(f"  [报告 -> spinlife_report.txt]")
+
+
+def main_dump_band_menu():
+    """导出能带数据子菜单"""
+    print()
+    print("=" * 65)
+    print("  导出能带数据")
+    print("=" * 65)
+    print()
+    print("  1)  PROCAR 能带 (k, E, ⟨σ_x⟩, ⟨σ_y⟩, ⟨σ_z⟩)")
+    print("  2)  Wannier 能带 (k, E)")
+    print("  0)  返回")
+    print()
+    c = input("  -->> ").strip()
+
+    if c == '1':
+        path = input("  -->> PROCAR 路径: ").strip()
+        if not path or not os.path.exists(path):
+            print("  [文件不存在]")
+            return
+        procar = PROCAR(path)
+        band = int(input(f"  能带序号 (1-{procar.nbands}): "))
+        dump_band_data(procar, band)
+
+    elif c == '2':
+        path = input("  -->> Wannier 能带文件路径: ").strip()
+        if not path or not os.path.exists(path):
+            print("  [文件不存在]")
+            return
+        k_frac, energies, nk, nbands = read_bands(path)
+        band = int(input(f"  能带序号 (1-{nbands}): ")) - 1
+        a = float(input("  -->> 晶格常数 a (Å): ") or "1")
+        k = k_to_reciprocal(k_frac, a)
+
+        out = f"wannier_band_{band+1}_data.txt"
+        with open(out, 'w') as f:
+            f.write("# k(A^-1)  E(eV)\n")
+            for i in range(nk):
+                f.write(f"{k[i]:.8f}  {energies[i, band]:.8f}\n")
+        print(f"\n  [{nk} points -> {out}]")
 
 
 if __name__ == '__main__':

@@ -1,19 +1,37 @@
 # spinlife — VASP 自旋寿命 + 载流子迁移率计算
 
 ```
-spinlife/          VASP PROCAR → α, β, τ_s (k·p + DP 机制)
+spinlife/          VASP PROCAR / Wannier90 → α, β, τ_s, μ
 qe_perturbo/       QE → Phonon → Perturbo workflow (EY + DP 机制)
 ```
 
-## 子命令
+## 交互式菜单 (默认入口)
 
 ```bash
-# 自旋寿命: 读 VASP LSORBIT PROCAR → α, β, τ_s
-python -m spinlife.main PROCAR
-python /path/to/spinlife/main.py PROCAR    # 也可直接执行
+python -m spinlife.main
+```
 
-# 载流子迁移率: 交互式输入应变数据 → C₂D, E₁, μ
+全功能 vaspkit 风格菜单:
+
+```
+  1)  载流子迁移率 (Mobility)           应变-总能量 → C₂D, E₁, μ, τ_p
+  2)  有效质量 (Wannier 能带 → m*)       Wannier 密能带 → 抛物线拟合 → m*
+  3)  SOC 参数 α/β                      Wannier ΔE² → √(α²+β²), PROCAR → α/β 比值
+  4)  自旋寿命 (手工输入 → τ_s)          m* + α/β + τ_p → τ_s, L_PSH
+  5)  导出能带数据                       PROCAR / Wannier 原始数据导出
+```
+
+## 快捷命令 (向后兼容)
+
+```bash
+# 自旋寿命 (PROCAR 传统模式)
+python -m spinlife.main PROCAR [options]
+
+# 载流子迁移率
 python -m spinlife.main mobility
+
+# 直接执行
+python /path/to/spinlife/main.py
 ```
 
 ## 安装
@@ -23,50 +41,58 @@ pip install -e .
 pip install git+https://github.com/yingjwei/spinlife.git
 ```
 
-## 自旋寿命 (PROCAR)
+## 功能详解
+
+### 1. 载流子迁移率
+
+2D 形变势理论: μ = 2eℏ³C₂D / (3kBT|m*|²E₁²)
+
+一次运行收集 X + Y 双方向数据:
+- C₂D: 应变-总能量二次拟合
+- E₁: 形变势线性拟合
+- 各向异性 m*: x/y 分开输入
+- 输出 μ 和 τ_p
+
+### 2. 有效质量 (Wannier)
+
+读 `wannier90_band.dat`, 沿高对称路径抛物线拟合:
+
+```
+E(k) = E₀ + A(k-k₀)²
+m*/m₀ = 3.81 / |A|
+```
+
+需提供晶格常数 a (Å) 将 k 转换为 Å⁻¹。
+
+### 3. SOC 参数 α/β
+
+**√(α²+β²)**: Wannier 密能带 → ΔE² vs k² 拟合 (可靠)
+**α/β 比值**: PROCAR 自旋期望 ⟨σ_x⟩/⟨σ_y⟩ Γ 附近平均值 (无需拟合)
+
+⇒ 分离 α, β
+
+### 4. 自旋寿命 (DP 机制)
+
+手工输入 m*, α, β, τ_p → τ_s, L_PSH
+
+### 5. PROCAR 传统模式
 
 ```bash
-# vaspkit 风格交互 → 显示能带表 → 输入 SOC 带对
-python -m spinlife.main PROCAR
-
-# 导出 band 44 原始数据, 用于手算验证
-python -m spinlife.main PROCAR --dump-band 44
-
-# 命令行指定 SOC 带对 (跳过交互式)
 python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 45 46
-
-# 指定参数
-python -m spinlife.main PROCAR --vbm 44 --tau-p 0.1 --k-range 0.05
+python -m spinlife.main PROCAR --dump-band 44
 ```
 
-### 输出
+## 输出文件
 
-- `spinlife_report.txt` — m*, α, β, τ_s, L_PSH
-- `spinlife_results.png` — SOC 能带 + ΔE² 拟合图 (VBM/CBM 双列)
-- `band_N_data.txt` — `--dump-band N` 导出的能带原始数据
-
-## 载流子迁移率
-
-```bash
-python -m spinlife.main mobility
-```
-
-vaspkit 风格交互式, 一次运行收集 X + Y 双方向数据, 支持各向异性有效质量。
-
-- 先输入 X 方向 (C₂D → E₁ → m*), 再输入 Y 方向 (可跳过)
-- x 和 y 可输入不同的 m* (有效质量各向异性)
-- 温度统一设置, 所有方向共用
-- 最终输出 X vs Y 对比表
-
-### 输出
-
-- `mobility_report.txt` — C₂D, E₁, μ, τ_p 报告 (含双方向对比)
-- `mobility_fit.png` — C₂D 二次拟合 + E₁ 线性拟合图 (x/y 叠置)
-
-## 方法
-
-- 自旋寿命: k·p 模型 → ΔE² vs k² 拟合 → √(α²+β²) → 自旋织构斜率 → α/β → DP τ_s
-- 迁移率: 2D 形变势理论 μ = 2eℏ³C₂D / (3kBT|m*|²E₁²)
+| 文件 | 模块 | 内容 |
+|------|------|------|
+| `mobility_report.txt` | Mobility | C₂D, E₁, μ, τ_p |
+| `mobility_fit.png` | Mobility | C₂D + E₁ 拟合图 |
+| `effmass_report.txt` | 有效质量 | m* |
+| `soc_report.txt` | α/β | √(α²+β²), α, β |
+| `spinlife_report.txt` | 自旋寿命 | τ_s, L_PSH |
+| `spinlife_results.png` | PROCAR | SOC 能带 + ΔE² 图 |
+| `band_N_data.txt` | PROCAR --dump-band | k, E, ⟨σ⟩ |
 
 ## QE → Perturbo (W6CCl16)
 

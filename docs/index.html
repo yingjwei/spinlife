@@ -23,331 +23,208 @@ tr:hover { background: #f0f5ff; }
 
 <h1>spinlife — VASP 自旋寿命 + 载流子迁移率计算</h1>
 
-<p>解析 VASP LSORBIT <code>PROCAR</code>, 提取 SOC 参数 α, β, 计算自旋寿命 τ<sub>s</sub>、PSH 周期 L<sub>PSH</sub> 和载流子迁移率 μ.</p>
+<p>解析 VASP LSORBIT <code>PROCAR</code> 和 Wannier90 能带, 提取 SOC 参数 α, β, 有效质量 m*, 自旋寿命 τ<sub>s</sub>, PSH 周期 L<sub>PSH</sub> 和载流子迁移率 μ.</p>
 
 <div class="note">
-<b>两个子命令:</b>
-<code>python -m spinlife.main PROCAR</code> — 自旋寿命 (PROCAR 直接读)<br>
-<code>python -m spinlife.main mobility</code> — 载流子迁移率 (交互式输入)
+<b>交互式菜单 (默认):</b>
+<code>python -m spinlife.main</code><br>
+<b>快捷命令:</b>
+<code>python -m spinlife.main PROCAR</code> (传统模式)
+<code>python -m spinlife.main mobility</code>
 </div>
 
 <!-- ============================================================ -->
-<h2>一、这个代码做了什么计算</h2>
+<h2>一、功能列表</h2>
 <!-- ============================================================ -->
 
-<p>以下按计算流程逐个说明每个物理量的定义、公式和代码实现, 方便用户手算验证.</p>
+<pre>
+ ========================================================================
+  spinlife — VASP 自旋寿命 + 载流子迁移率计算
+ ========================================================================
 
-<h3>1.1 有效质量 m*</h3>
-<p><b>代码:</b> <code>fit_soc.py</code> 第27-49行, <code>fit_effmass()</code></p>
+  1)  载流子迁移率 (Mobility)
+  2)  有效质量 (Wannier 能带 → m*)
+  3)  SOC 参数 α/β (Wannier + PROCAR)
+  4)  自旋寿命 (输入 m*, α, β, τ_p)
+  5)  导出能带数据
 
-<p>沿 ky=0 切面取 VBM/CBM 附近 k 点, 做抛物线拟合:</p>
+  0)  退出
+</pre>
+
+<p><b>选项 1:</b> 应变-总能量 → C₂D, E₁, μ, τ_p (x + y 双方向, 各向异性 m*)</p>
+<p><b>选项 2:</b> 读 <code>wannier90_band.dat</code> → 抛物线拟合 → m* (密 k 网格, 可靠)</p>
+<p><b>选项 3:</b> Wannier 密能带 ΔE² vs k² 拟合 → √(α²+β²); PROCAR 自旋期望平均 → α/β 比值; 结合得 α, β</p>
+<p><b>选项 4:</b> 手工输入 m*, α, β, τ_p → τ<sub>s</sub>, L<sub>PSH</sub></p>
+
+<!-- ============================================================ -->
+<h2>二、计算方法</h2>
+<!-- ============================================================ -->
+
+<h3>2.1 有效质量 m*</h3>
+
+<p><b>数据来源:</b> Wannier90 能带 (<code>wannier90_band.dat</code>, 密 k 网格)</p>
+
 <pre>
 E(k) = E₀ + A(k-k₀)²
 
 对 (k-k₀)² vs E 线性回归 → 斜率 A
-m*/m₀ = 3.81 / |A|
+m*/m₀ = 3.81 / |A|        (3.81 = ℏ²/2m₀ in eV·Å²)
 </pre>
 
-<div class="note">
-<b>系数 3.81 的由来:</b> ℏ²/(2m₀) = (6.582×10⁻¹⁶ eV·s)² / (2 × 9.109×10⁻³¹ kg × 10⁻²⁰ m²/Å²) = 3.81 eV·Å².
-即 E(eV) = 3.81 · k²(Å⁻²) / (m*/m₀).
-</div>
+<p>需提供晶格常数 a (Å) 将 Wannier90 分数坐标 k 转换为 Å⁻¹.</p>
 
-<h3>1.2 自旋-轨道耦合参数 √(α²+β²)</h3>
-<p><b>代码:</b> <code>fit_soc.py</code> 第52-80行, <code>fit_alpha_beta()</code></p>
+<h3>2.2 √(α²+β²) — Wannier SOC 能带</h3>
 
-<p>从 SOC 劈裂的双带出发 (如 VBM/VBM-1), 提取能带劈裂 ΔE = |E_upper - E_lower|:</p>
+<p><b>数据来源:</b> Wannier90 SOC 双带 (含自旋-轨道耦合)</p>
+
 <pre>
+ΔE = |E_upper - E_lower|
 ΔE² = 4Δ² + 4(α²+β²)k²
 
 对 k² vs ΔE² 线性回归:
   slope = 4(α²+β²)
   intercept = 4Δ²
 
-√(α²+β²) = √(slope) / 2       (单位: eV·Å)
-Δ = √(intercept) / 2           (单位: eV)
+√(α²+β²) = √(slope) / 2       (eV·Å)
+Δ = √(intercept) / 2           (eV)
 </pre>
 
-<h3>1.3 α/β 比值分离</h3>
-<p><b>代码:</b> <code>main.py</code> 第168-189行 (自旋织构线性拟合)</p>
+<p>Wannier 密 k 网格提供几百个 k 点, 拟合可靠性远超 VASP 稀疏 k 网格.</p>
 
-<p>从 k·p 模型, 自旋期望值在 k→Γ 附近:</p>
+<h3>2.3 α/β 比值 — PROCAR 自旋期望</h3>
+
+<p><b>数据来源:</b> VASP LSORBIT PROCAR (Γ 附近自旋分量)</p>
+
+<p>从 k·p 模型, ⟨σ_x⟩/⟨σ_y⟩ = α/β 在 Γ 附近与 k 无关, 因此直接取平均, 无需拟合:</p>
+
 <pre>
-⟨σ_x⟩ ≈ 2αk/Δ      ⟨σ_y⟩ ≈ 2βk/Δ
-
-→ ⟨σ_x⟩/⟨σ_y⟩ = α/β   (k 无关, 仅由 SOC 系数比决定)
-
-对 ⟨σ_x⟩ vs k 线性回归 → slope_x
-对 ⟨σ_y⟩ vs k 线性回归 → slope_y
-
-ratio = slope_x / slope_y   (= α/β)
-
+ratio = mean(⟨σ_x⟩ / ⟨σ_y⟩)   取 Γ 附近 3-5 个 k 点
 α = √(α²+β²) / √(1 + 1/ratio²)
 β = α / ratio
 </pre>
 
-<div class="warn">
-<b>验证方法:</b> 用 <code>--dump-band N</code> 导出能带原始数据 (k, E, ⟨σ_x⟩, ⟨σ_y⟩, ⟨σ_z⟩),
-在 Excel 或 Origin 中手动做两次线性拟合, 与程序结果对比:
-<pre>python -m spinlife.main PROCAR --dump-band 44</pre>
-输出 <code>band_44_data.txt</code>, 包含 k(Å⁻¹), E(eV), ⟨σ_x⟩, ⟨σ_y⟩, ⟨σ_z⟩.
-</div>
+<p>这样 α/β 比值由 PROCAR 直接提供, 不需要拟合自旋织构, 更可靠.</p>
 
-<h3>1.4 自旋寿命 τ_s (DP 机制)</h3>
-<p><b>代码:</b> <code>fit_soc.py</code> 第103-158行, <code>calc_spin_lifetime()</code></p>
+<h3>2.4 自旋寿命 τ_s (DP 机制)</h3>
 
 <pre>
-α_eff = |α - β|                         (SU(2) 对称性破缺项)
-α_eff_Jm = α_eff × 1e-3 × e × 1e-10     (meV·Å → J·m)
+α_eff = |α - β|                    (SU(2) 对称性破缺项)
+τ_s = ℏ² / (2 · m* · m₀ · α_eff² · τ_p)
 
-τ_s = ℏ² / (2 × m* × m₀ × α_eff_Jm² × τ_p)    (秒)
-
-L_PSH = πℏ² / (m* × m₀ × |α|_Jm)              (米)
-      ≈ 2.39 / (m* × |α|_meVA)                 (μm)
+L_PSH = πℏ² / (m* · m₀ · |α|)
+      ≈ 2.39 / (m* · |α|_meVA)     (μm)
 </pre>
 
-<h3>1.5 弹性模量 C₂D</h3>
-<p><b>代码:</b> <code>mobility/calc_mobility.py</code>, <code>fit_C2D()</code></p>
+<p>τ_s 由选项 2 (m*) 和选项 3 (α, β) 的结果作为输入计算.</p>
 
-<p>对不同晶格应变的总能量做二次拟合:</p>
+<h3>2.5 载流子迁移率 μ</h3>
+
+<p><b>数据来源:</b> VASP 应变计算 (relax OUTCAR 总能量 + SOC OUTCAR 能带边缘)</p>
+
 <pre>
-E(ε) = E₀ + A₁ε + A₂ε²
+C₂D = (1/A₀) × ∂²E/∂ε²             (弹性模量, J/m²)
+E₁  = dE_VBM/dε 或 dE_CBM/dε        (形变势, eV)
 
-∂²E/∂ε² = 2A₂                                (eV)
-C₂D = (1/A₀) × ∂²E/∂ε²                       (eV/Å²)
-C₂D (J/m²) = C₂D (eV/Å²) × e / 10⁻²⁰         (J/m²)
+μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)   (cm²/V·s)
+τ_p = μ · m* / e                    (动量散射时间, ps)
 </pre>
 
-<p><b>应变计算:</b></p>
-<ol>
-  <li>对 a 或 b 晶格做 ±1%, ±2%, ±3% 的缩放 (固定另一轴)</li>
-  <li>每个应变点做 relax (ISIF=2) + SOC static 计算</li>
-  <li>从 relax OUTCAR 读总能量, 从 SOC OUTCAR 读 VBM/CBM 能量</li>
-  <li>A₀ = a × b (平衡晶格面积, 从 POSCAR 读取)</li>
-</ol>
-
-<div class="note">
-<b>注意事项:</b>
-<ul>
-  <li>INCAR 中 <code>ICHARG=2</code> 在 relax 中仍然做完整 SCF, 可以安全使用</li>
-  <li>至少 5 个应变点 (±1%, ±2%, 0%) 才能获得可靠的二次拟合</li>
-  <li>x 和 y 方向各跑一组应变, 分别得到 C₂D<sub>x</sub> 和 C₂D<sub>y</sub></li>
-</ul>
-</div>
-
-<h3>1.6 形变势常数 E₁</h3>
-<p><b>代码:</b> <code>mobility/calc_mobility.py</code>, <code>fit_E1()</code></p>
-
-<p>对 VBM/CBM 能量随应变的变化做线性拟合:</p>
-<pre>
-E_VBM(ε) = E₀ + E₁ · ε
-
-E₁ = slope          (eV)
-</pre>
-
-<p>E₁ 反映能带边缘对晶格变形的敏感度: E₁ 越大, 电子-声子散射越强, 迁移率越低.</p>
-
-<h3>1.7 载流子迁移率 μ</h3>
-<p><b>代码:</b> <code>mobility/calc_mobility.py</code>, <code>calc_mu()</code></p>
-
-<p>2D 形变势理论公式 (Bardeen-Shockley 推广):</p>
-<pre>
-μ = (2 e ℏ³ C₂D) / (3 k_B T |m*|² E₁²)
-
-其中:
-  e  = 1.602×10⁻¹⁹ C     (元电荷)
-  ℏ  = 1.055×10⁻³⁴ J·s  (约化普朗克常数)
-  k_B = 1.381×10⁻²³ J/K  (玻尔兹曼常数)
-  C₂D: J/m²               (弹性模量)
-  m*: kg                  (有效质量)
-  E₁: J                   (形变势常数)
-  T: K                    (温度)
-
-输出: cm²/V·s
-</pre>
+<p>支持 x + y 双方向一次运行, m*<sub>x</sub> ≠ m*<sub>y</sub> 各向异性.</p>
 
 <!-- ============================================================ -->
-<h2>二、这个代码如何使用</h2>
+<h2>三、使用指南</h2>
 <!-- ============================================================ -->
 
-<h3>2.1 安装</h3>
+<h3>3.1 交互式菜单</h3>
+
 <pre>
-pip install -e .
-# 或
-pip install git+https://github.com/yingjwei/spinlife.git
+python -m spinlife.main
 </pre>
 
-<h3>2.2 子命令 1: 自旋寿命 (PROCAR)</h3>
+<p>默认进入 vaspkit 风格交互菜单, 按数字选择功能.</p>
 
-<p>输入 VASP LSORBIT 计算的 PROCAR 文件, 自动提取 α, β, τ_s.</p>
-
-<div class="note">
-<b>两种运行方式:</b>
-<code>python -m spinlife.main PROCAR</code> (模块模式, 需安装)
-或 <code>python /path/to/spinlife/main.py PROCAR</code> (直接执行)
-</div>
+<h3>3.2 Wannier 有效质量</h3>
 
 <pre>
-# vaspkit 风格交互 — 显示能带表, 输入 SOC 带对
+--> 选择 2) 有效质量
+--> 输入 wannier90_band.dat 路径
+--> 输入晶格常数 a (Å)
+--> 选择能带序号
+--> 选择 VBM/CBM
+
+m* = 4.3210 m₀  (R² = 0.9998)
+</pre>
+
+<h3>3.3 SOC α/β</h3>
+
+<pre>
+--> 选择 3) SOC 参数 α/β
+
+[1/2] Wannier SOC 能带 → √(α²+β²)
+  -->  输入 wannier90_band.dat
+  -->  选择 SOC 带对上/下能带
+  -->  拟合范围 ±Δk
+
+[2/2] PROCAR → α/β 比值 (无需拟合)
+  -->  输入 PROCAR 路径
+  -->  指定 SOC 带对
+
+√(α²+β²) = 14.13 meV·Å
+α/β     = 1.234
+α       = 11.23 meV·Å
+β       = 9.10 meV·Å
+</pre>
+
+<h3>3.4 快捷命令行 (向后兼容)</h3>
+
+<pre>
+# PROCAR 传统模式 (PROCAR 稀疏 k 网格)
 python -m spinlife.main PROCAR
-
-# 先导出能带原始数据, 手算验证
+python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 45 46
 python -m spinlife.main PROCAR --dump-band 44
 
-# 命令行指定 SOC 带对 (跳过交互式输入)
-python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 45 46
-
-# 指定 VBM band 和拟合参数
-python -m spinlife.main PROCAR --vbm 44 --tau-p 0.5 --k-range 0.03 --T 300
-
-# 查看帮助
-python -m spinlife.main --help
-</pre>
-
-<p>交互式流程 (vaspkit 风格):</p>
-<pre>
- ========================================================================
-               spinlife — VASP 自旋寿命计算
- ========================================================================
-
-  PROCAR : /path/to/PROCAR
-  k-points: 21×21  bands: 80
-  VBM: band 44  CBM: band 45
-
- ========================================================================
-  SOC 带对选择
- ========================================================================
-
-  VBM 附近能带:
-    Band   Energy(eV)
-   --------------------
-     40     -0.2345
-     41     -0.1890
-     ...
-     44      0.0000  <-- VBM
-     ...
-
-  -->> VBM SOC upper band: 44
-  -->> VBM SOC lower band: 43
-</pre>
-
-<table>
-<tr><th>参数</th><th>说明</th></tr>
-<tr><td><code>--vbm N</code></td><td>VBM 能带序号 (默认自动检测)</td></tr>
-<tr><td><code>--cbm N</code></td><td>CBM 能带序号</td></tr>
-<tr><td><code>--soc-vbm U L</code></td><td>VBM SOC 带对: upper 和 lower 序号</td></tr>
-<tr><td><code>--soc-cbm U L</code></td><td>CBM SOC 带对: upper 和 lower 序号</td></tr>
-<tr><td><code>--tau-p N</code></td><td>动量散射时间 (ps), 默认 0.1</td></tr>
-<tr><td><code>--k-range N</code></td><td>拟合范围 (Å⁻¹), 默认 0.05</td></tr>
-<tr><td><code>--T N</code></td><td>温度 (K), 默认 300</td></tr>
-<tr><td><code>--dump-band N</code></td><td>导出该能带的原始数据 (k, E, sx, sy, sz)</td></tr>
-<tr><td><code>--output-dir DIR</code></td><td>输出目录</td></tr>
-</table>
-
-<h3>2.3 子命令 2: 载流子迁移率 (交互式)</h3>
-
-<pre>
+# 迁移率
 python -m spinlife.main mobility
+
+# 直接执行
+python /path/to/spinlife/main.py
 </pre>
 
-<p>vaspkit 风格交互式, 一次运行收集 X + Y 双方向数据, 支持各向异性有效质量:</p>
-<pre>
- ========================================================================
-  spinlife — 载流子迁移率计算
-  (Deformation Potential Theory)
- ========================================================================
-
-  μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)
-
-  -->> 温度 T (K) [300]:
-
- ========================================================================
-  [X] 方向
- ========================================================================
-
-  C2D — 应变 vs 总能量:
-  输入 应变(%)  总能量(eV), 一行一个, 空行结束
-  -->> -3 -277.6587049
-  -->> -2 -277.7078816
-  -->> -1 -277.7374091
-  -->> 0 -277.7485044
-  -->> 1 -277.7471965
-  -->> 2 -277.7327427
-  -->> 3 -277.7150140
-  -->>
-
-  Fit: E = 68.96*eps^2 + -0.82*eps + -277.748648
-  d2E/deps2 = 137.91 eV,  R^2 = 0.986443
-
-  -->> POSCAR 路径 (留空则手动输入 A0): POSCAR
-  C2D = 16.58 J/m^2
-
-  -->> 输入 VBM 形变势数据？(y/n, 默认n): y
-  输入 VBM (x): 应变(%)  E(eV), 空行结束
-  -->> -3 -2.6845
-  ...
-
-  -->> m* (VBM, x方向, m0): 4.32
-
- ========================================================================
-  [Y] 方向
- ========================================================================
-  ... (同上, 可跳过)
-
- ========================================================================
-  Comparison: X vs Y
- ========================================================================
-                      X               Y
-  --------------------------------------------------
-     C2D (J/m^2)          16.58           15.23
-   E1_VBM (eV)           -0.82           -0.75
-  mu_h (cm^2/V.s)       123.45          145.67
-</pre>
-
-<h3>2.4 输出文件</h3>
-
-<table>
-<tr><th>文件</th><th>子命令</th><th>内容</th></tr>
-<tr><td><code>spinlife_report.txt</code></td><td>PROCAR</td><td>m*, α, β, τ_s, L_PSH 完整报告</td></tr>
-<tr><td><code>spinlife_results.png</code></td><td>PROCAR</td><td>SOC 能带 + ΔE² 拟合图 (VBM/CBM 双列)</td></tr>
-<tr><td><code>band_N_data.txt</code></td><td>PROCAR + --dump-band</td><td>指定能带的 k, E, sx, sy, sz 原始数据</td></tr>
-<tr><td><code>mobility_report.txt</code></td><td>mobility</td><td>C₂D, E₁, μ 完整报告</td></tr>
-<tr><td><code>mobility_fit.png</code></td><td>mobility</td><td>C₂D 二次拟合 + E₁ 线性拟合图</td></tr>
-</table>
-
-<h3>2.5 完整的迁移率计算流程</h3>
+<h3>3.5 完整工作流建议</h3>
 
 <ol>
-  <li><b>用 spinlife 算 m*</b>: <code>python -m spinlife.main PROCAR</code> (记录 m* 值)</li>
-  <li><b>跑应变 batch</b>: x 方向 (拉伸 a) 和 y 方向 (拉伸 b) 各一组, 每组 ±1%, ±2%, ±3% 共 7 个应变点</li>
-  <li><b>提取数据</b>: 从 relax OUTCAR 读总能量, 从 SOC OUTCAR 读 VBM/CBM</li>
-  <li><b>算迁移率</b>: <code>python -m spinlife.main mobility</code>, 按提示输入数据</li>
+  <li><b>运行 PROCAR 传统模式</b> → 查看能带结构, 确认 SOC 带对</li>
+  <li><b>Wannier 有效质量</b> → 菜单选项 2, 读 <code>wannier90_band.dat</code></li>
+  <li><b>Wannier α/β</b> → 菜单选项 3, 同时需要 Wannier 能带 + PROCAR</li>
+  <li><b>迁移率</b> → 菜单选项 1, 需要 VASP 应变计算结果</li>
+  <li><b>自旋寿命</b> → 菜单选项 4, 使用上述结果输入</li>
 </ol>
 
-<h3>2.6 INCAR 示例 (应变计算)</h3>
+<h3>3.6 输入输出文件</h3>
 
 <table>
-<tr><th></th><th>Relax (每个应变点)</th><th>Static (SOC)</th></tr>
-<tr><td>ISIF</td><td>2</td><td>—</td></tr>
-<tr><td>IBRION</td><td>2</td><td>-1</td></tr>
-<tr><td>NSW</td><td>1000</td><td>0</td></tr>
-<tr><td>ICHARG</td><td>2</td><td>2</td></tr>
-<tr><td>LSORBIT</td><td>—</td><td>.TRUE.</td></tr>
-<tr><td>LORBIT</td><td>11</td><td>11</td></tr>
+<tr><th>文件</th><th>功能</th><th>内容</th></tr>
+<tr><td><code>wannier90_band.dat</code></td><td>输入</td><td>Wannier90 插值能带 (密 k 网格)</td></tr>
+<tr><td><code>PROCAR</code></td><td>输入</td><td>VASP LSORBIT 自旋投影数据</td></tr>
+<tr><td><code>mobility_report.txt</code></td><td>输出</td><td>C₂D, E₁, μ, τ_p (x/y 双方向)</td></tr>
+<tr><td><code>mobility_fit.png</code></td><td>输出</td><td>C₂D + E₁ 拟合对比图</td></tr>
+<tr><td><code>effmass_report.txt</code></td><td>输出</td><td>有效质量 m*</td></tr>
+<tr><td><code>soc_report.txt</code></td><td>输出</td><td>√(α²+β²), α, β</td></tr>
+<tr><td><code>spinlife_report.txt</code></td><td>输出</td><td>τ<sub>s</sub>, L<sub>PSH</sub></td></tr>
+<tr><td><code>spinlife_results.png</code></td><td>输出</td><td>SOC 能带 + ΔE² 拟合图</td></tr>
 </table>
 
-<p>每个应变点: 修改 POSCAR 的 a 或 b 晶格 → relax → 重跑 SOC static 两个 VASP 任务.</p>
-
 <!-- ============================================================ -->
-<h2>三、文件清单</h2>
+<h2>四、文件清单</h2>
 <!-- ============================================================ -->
 
 <table>
 <tr><th>文件</th><th>说明</th></tr>
-<tr><td><code>spinlife/read_procar.py</code></td><td>PROCAR 解析器 — 读 k 点/能带/自旋密度</td></tr>
-<tr><td><code>spinlife/fit_soc.py</code></td><td>m*, α, β 拟合 + τ_s 计算</td></tr>
-<tr><td><code>spinlife/main.py</code></td><td>主入口 — 自旋寿命 + 迁移率子命令</td></tr>
-<tr><td><code>spinlife/mobility/calc_mobility.py</code></td><td>C₂D, E₁ 拟合 + μ 计算核心函数</td></tr>
+<tr><td><code>spinlife/main.py</code></td><td>主入口 — 交互式菜单 + 所有分析功能</td></tr>
+<tr><td><code>spinlife/read_procar.py</code></td><td>PROCAR 解析器</td></tr>
+<tr><td><code>spinlife/fit_soc.py</code></td><td>m*, α/β 拟合 + τ<sub>s</sub> 计算</td></tr>
+<tr><td><code>spinlife/wannier.py</code></td><td>Wannier90 能带文件解析 + k 空间转换</td></tr>
+<tr><td><code>spinlife/mobility/calc_mobility.py</code></td><td>C₂D, E₁, μ 计算</td></tr>
 <tr><td><code>docs/index.html</code></td><td>本文档</td></tr>
 </table>
 
