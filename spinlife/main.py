@@ -150,6 +150,7 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     sx_up_scan = sx_up[idx_slice][order]
     sy_up_scan = sy_up[idx_slice][order]
     sx_lo_scan = sx_lo[idx_slice][order]
+    sy_lo_scan = sy_lo[idx_slice][order]
 
     res['k_scan'] = k_scan
     res['E_up_scan'] = E_up_scan
