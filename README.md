@@ -51,12 +51,17 @@ python -m spinlife.main PROCAR --vbm 44 --tau-p 0.1 --k-range 0.05
 python -m spinlife.main mobility
 ```
 
-vaspkit 风格交互式输入应变-能量数据 → 自动拟合 C₂D 和 E₁ → 输出 μ 和 τ_p。
+vaspkit 风格交互式, 一次运行收集 X + Y 双方向数据, 支持各向异性有效质量。
+
+- 先输入 X 方向 (C₂D → E₁ → m*), 再输入 Y 方向 (可跳过)
+- x 和 y 可输入不同的 m* (有效质量各向异性)
+- 温度统一设置, 所有方向共用
+- 最终输出 X vs Y 对比表
 
 ### 输出
 
-- `mobility_report.txt` — C₂D, E₁, μ, τ_p 报告
-- `mobility_fit.png` — C₂D 二次拟合 + E₁ 线性拟合图
+- `mobility_report.txt` — C₂D, E₁, μ, τ_p 报告 (含双方向对比)
+- `mobility_fit.png` — C₂D 二次拟合 + E₁ 线性拟合图 (x/y 叠置)
 
 ## 方法
 
