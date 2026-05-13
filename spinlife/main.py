@@ -19,7 +19,13 @@ spinlife — VASP PROCAR 自旋寿命 + 载流子迁移率计算
 
 import sys
 import os
+from pathlib import Path
 import numpy as np
+
+# 允许直接执行: python path/to/spinlife/main.py PROCAR
+_parent = str(Path(__file__).resolve().parent.parent)
+if _parent not in sys.path:
+    sys.path.insert(0, _parent)
 
 try:
     import matplotlib
@@ -29,10 +35,10 @@ try:
 except ImportError:
     _HAS_MPL = False
 
-from .read_procar import PROCAR
-from .fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
-from .mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
-                                     calc_mu, C2D_Jm2_from_d2E)
+from spinlife.read_procar import PROCAR
+from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
+from spinlife.mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
+                                             calc_mu, C2D_Jm2_from_d2E)
 
 
 def build_k_grid(kpoints):
@@ -199,12 +205,16 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     return res
 
 
-def _interactive_band(prompt, default):
-    try:
-        inp = input(prompt).strip()
-        return int(inp) if inp else default
-    except (EOFError, KeyboardInterrupt):
-        return default
+def _show_band_table(procar, center, label, n_range=5):
+    """vaspkit-style: 显示中心能带附近列表"""
+    print(f"\n  {label} 附近能带:")
+    print(f"  {'Band':>6}  {'Energy(eV)':>12}")
+    print(f"  {'-'*22}")
+    for b in range(max(1, center - n_range),
+                   min(procar.nbands + 1, center + n_range + 1)):
+        e = procar.get_band_energy(b)[procar.nk // 2]
+        tag = f"<-- {label}" if b == center else ""
+        print(f"  {b:>6}  {e:>12.4f}  {tag}")
 
 
 def main():
@@ -298,21 +308,21 @@ def main():
         order = np.argsort(k_scan)
         k_scan = k_scan[order]
 
-    # ========== SOC 能带选择 (交互式 / 命令行) ==========
+    # ========== SOC 能带选择 (vaspkit 风格交互式) ==========
     if soc_vbm_up is None:
-        print("\n--- VBM SOC Bands ---")
-        soc_vbm_up = _interactive_band(
-            f"  m* band [{vbm}]: ", vbm)
-        soc_vbm_lo = _interactive_band(
-            f"  SOC lower (partner) band [{max(vbm - 1, 1)}]: ",
-            max(vbm - 1, 1))
+        print()
+        print("=" * 65)
+        print("  SOC 带对选择")
+        print("=" * 65)
+        _show_band_table(procar, vbm, "VBM")
+        print()
+        soc_vbm_up = int(input("  -->> VBM SOC upper band: ") or vbm)
+        soc_vbm_lo = int(input("  -->> VBM SOC lower band: ") or max(vbm - 1, 1))
     if soc_cbm_up is None:
-        print("\n--- CBM SOC Bands ---")
-        soc_cbm_up = _interactive_band(
-            f"  m* band [{cbm}]: ", cbm)
-        soc_cbm_lo = _interactive_band(
-            f"  SOC upper (partner) band [{min(cbm + 1, procar.nbands)}]: ",
-            min(cbm + 1, procar.nbands))
+        _show_band_table(procar, cbm, "CBM")
+        print()
+        soc_cbm_up = int(input("  -->> CBM SOC upper band: ") or cbm)
+        soc_cbm_lo = int(input("  -->> CBM SOC lower band: ") or min(cbm + 1, procar.nbands))
 
     # ========== VBM 拟合 ==========
     res_vbm = run_soc_fit(
@@ -410,13 +420,14 @@ def main():
     print("=" * 65)
 
 
-def _input_data(prompt):
-    """读取多行数据, 空行结束"""
-    print(prompt)
+def _input_data(prompt=None):
+    """vaspkit-style: 读取多行数据, 空行结束, 每行前缀 -->>"""
+    if prompt:
+        print(prompt)
     lines = []
     while True:
         try:
-            line = input().strip()
+            line = input("  -->> ").strip()
             if not line:
                 break
             lines.append(line)
@@ -428,21 +439,28 @@ def _input_data(prompt):
 def main_mobility():
     """交互式载流子迁移率计算"""
     print("=" * 65)
-    print("  spinlife.mobility -- 载流子迁移率计算 (形变势理论)")
+    print("  spinlife — 载流子迁移率计算")
+    print("  (Deformation Potential Theory)")
     print("=" * 65)
+    print()
+    print("  μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)")
+    print()
 
     # --- 方向 ---
     direction = ''
     try:
-        direction = input("\n  方向 (x/y, Enter跳过): ").strip()
+        direction = input("  -->> 方向 (x/y, Enter跳过): ").strip()
     except (EOFError, KeyboardInterrupt):
         pass
 
     # --- C2D: 应变-能量 ---
-    print("\n--- C2D (弹性模量) ---")
+    print()
+    print("=" * 65)
+    print("  C2D (弹性模量) — 应变 vs 总能量")
+    print("=" * 65)
     print("  输入 应变(%)  总能量(eV), 一行一个, 空行结束")
     print("  例: -3 -277.65870")
-    raw = _input_data("  >>>")
+    raw = _input_data("")
     strain = []
     energy = []
     for line in raw:
@@ -462,11 +480,11 @@ def main_mobility():
     # --- A0 ---
     A0 = None
     try:
-        poscar = input("  POSCAR 路径 (留空则手动输入 A0): ").strip()
+        poscar = input("  -->> POSCAR 路径 (留空则手动输入 A0): ").strip()
         if poscar:
             A0 = read_POSCAR_A0(poscar)
         if A0 is None:
-            A0 = float(input("  A0 (A^2): "))
+            A0 = float(input("  -->> A0 (A^2): "))
     except (EOFError, KeyboardInterrupt):
         pass
 
@@ -479,8 +497,9 @@ def main_mobility():
     E1_vbm = None
     vbm_r2 = None
     try:
-        if input("\n  输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
-            raw = _input_data("  输入 应变(%)  E_VBM(eV), 空行结束\n  >>>")
+        if input("\n  -->> 输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+            print("  输入 应变(%)  E_VBM(eV), 空行结束")
+            raw = _input_data("")
             s_vbm, e_vbm = [], []
             for line in raw:
                 parts = line.split()
@@ -496,8 +515,9 @@ def main_mobility():
     E1_cbm = None
     cbm_r2 = None
     try:
-        if input("\n  输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
-            raw = _input_data("  输入 应变(%)  E_CBM(eV), 空行结束\n  >>>")
+        if input("\n  -->> 输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+            print("  输入 应变(%)  E_CBM(eV), 空行结束")
+            raw = _input_data("")
             s_cbm, e_cbm = [], []
             for line in raw:
                 parts = line.split()
@@ -515,24 +535,24 @@ def main_mobility():
     T = 300
     try:
         if E1_vbm is not None:
-            m_vbm = float(input("\n  m* (VBM, m0): "))
+            m_vbm = float(input("\n  -->> m* (VBM, m0): "))
         if E1_cbm is not None:
-            m_cbm = float(input("  m* (CBM, m0): "))
-        T = float(input(f"  T (K) [{T}]: ") or T)
+            m_cbm = float(input("  -->> m* (CBM, m0): "))
+        T = float(input(f"  -->> T (K) [{T}]: ") or T)
     except (EOFError, KeyboardInterrupt):
         pass
 
     # --- 计算 ---
-    print(f"\n--- Results ({direction if direction else ''}) ---")
+    print(f"\n--- Results ({direction if direction else '-'}) ---")
     results = []
     if C2D_Jm2 and E1_vbm and m_vbm:
-        mu_h = calc_mu(C2D_Jm2, E1_vbm, m_vbm, T)
-        print(f"  空穴 (VBM):  mu = {mu_h:.2f} cm^2/V.s")
-        results.append(('hole(VBM)', mu_h, m_vbm, E1_vbm))
+        mu_h, tau_p_h = calc_mu(C2D_Jm2, E1_vbm, m_vbm, T)
+        print(f"  空穴 (VBM):  mu = {mu_h:.2f} cm^2/V.s,  tau_p = {tau_p_h:.4f} ps")
+        results.append(('hole(VBM)', mu_h, tau_p_h, m_vbm, E1_vbm))
     if C2D_Jm2 and E1_cbm and m_cbm:
-        mu_e = calc_mu(C2D_Jm2, E1_cbm, m_cbm, T)
-        print(f"  电子 (CBM):  mu = {mu_e:.2f} cm^2/V.s")
-        results.append(('electron(CBM)', mu_e, m_cbm, E1_cbm))
+        mu_e, tau_p_e = calc_mu(C2D_Jm2, E1_cbm, m_cbm, T)
+        print(f"  电子 (CBM):  mu = {mu_e:.2f} cm^2/V.s,  tau_p = {tau_p_e:.4f} ps")
+        results.append(('electron(CBM)', mu_e, tau_p_e, m_cbm, E1_cbm))
 
     # --- 绘图 ---
     if _HAS_MPL:
@@ -589,8 +609,8 @@ def main_mobility():
             f.write(f"E1_CBM: {E1_cbm:.4f} eV, R^2: {cbm_r2:.6f}\n")
         if results:
             f.write("\n--- Results ---\n")
-            for name, mu, ms, e1 in results:
-                f.write(f"{name}: mu = {mu:.2f} cm^2/V.s\n")
+            for name, mu, tau_p, ms, e1 in results:
+                f.write(f"{name}: mu = {mu:.2f} cm^2/V.s,  tau_p = {tau_p:.4f} ps\n")
     print(f"\n  [Report: mobility_report.txt]")
     print("=" * 65)
 

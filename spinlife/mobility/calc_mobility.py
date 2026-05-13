@@ -61,11 +61,14 @@ def fit_E1(strain, E_band):
 
 
 def calc_mu(C2D_Jm2, E1_eV, m_star_m0, T=300):
-    """2D 形变势迁移率, 返回 cm^2/V.s"""
+    """2D 形变势迁移率, 返回 (mu_cm2, tau_p_ps)"""
     m_kg = m_star_m0 * m0
     E1_J = E1_eV * eV_to_J
     mu_SI = (2 * e_ch * hbar**3 * C2D_Jm2) / (3 * kB * T * m_kg**2 * E1_J**2)
-    return mu_SI * 1e4
+    mu_cm2 = mu_SI * 1e4
+    # tau_p = mu * m* / e
+    tau_p_s = mu_SI * m_kg / e_ch
+    return mu_cm2, tau_p_s * 1e12
 
 
 def C2D_Jm2_from_d2E(d2E_eV, A0_A2):
