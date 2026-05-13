@@ -421,197 +421,256 @@ def main():
     print("=" * 65)
 
 
-def _input_data(prompt=None):
-    """vaspkit-style: 读取多行数据, 空行结束, 每行前缀 -->>"""
-    if prompt:
-        print(prompt)
-    lines = []
-    while True:
-        try:
-            line = input("  -->> ").strip()
-            if not line:
-                break
-            lines.append(line)
-        except (EOFError, KeyboardInterrupt):
-            break
-    return lines
-
-
-def main_mobility():
-    """交互式载流子迁移率计算"""
-    print("=" * 65)
-    print("  spinlife — 载流子迁移率计算")
-    print("  (Deformation Potential Theory)")
-    print("=" * 65)
-    print()
-    print("  μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)")
-    print()
-
-    # --- 方向 ---
-    direction = ''
-    try:
-        direction = input("  -->> 方向 (x/y, Enter跳过): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        pass
-
-    # --- C2D: 应变-能量 ---
-    print()
-    print("=" * 65)
-    print("  C2D (弹性模量) — 应变 vs 总能量")
-    print("=" * 65)
-    print("  输入 应变(%)  总能量(eV), 一行一个, 空行结束")
-    print("  例: -3 -277.65870")
+def _input_strain_data():
+    """通用: 输入应变-能量数据, 返回 (strain_array, energy_array) 或 (None, None)"""
+    print("  输入 应变(%)  能量(eV), 一行一个, 空行结束")
     raw = _input_data("")
-    strain = []
-    energy = []
+    strain, energy = [], []
     for line in raw:
         parts = line.split()
         if len(parts) >= 2:
             strain.append(float(parts[0]) / 100)
             energy.append(float(parts[1]))
     if len(strain) < 3:
-        print(f"  [至少需要3个数据点, 当前{len(strain)}个]")
-        return
+        return None, None
+    return np.array(strain), np.array(energy)
 
-    d2E, r2_e, coeffs = fit_C2D(np.array(strain), np.array(energy))
-    A2, A1, A0_fit = coeffs
-    print(f"\n  Fit: E = {A2:.4f}*eps^2 + {A1:.4f}*eps + {A0_fit:.6f}")
-    print(f"  d2E/deps2 = {d2E:.4f} eV,  R^2 = {r2_e:.6f}")
 
-    # --- A0 ---
-    A0 = None
-    try:
-        poscar = input("  -->> POSCAR 路径 (留空则手动输入 A0): ").strip()
-        if poscar:
-            A0 = read_POSCAR_A0(poscar)
-        if A0 is None:
-            A0 = float(input("  -->> A0 (A^2): "))
-    except (EOFError, KeyboardInterrupt):
-        pass
+def _input_E1_data(label):
+    """输入形变势数据: 应变(%)  E(eV)"""
+    print(f"  输入 {label}: 应变(%)  E(eV), 空行结束")
+    raw = _input_data("")
+    s, e = [], []
+    for line in raw:
+        parts = line.split()
+        if len(parts) >= 2:
+            s.append(float(parts[0]) / 100)
+            e.append(float(parts[1]))
+    return (np.array(s), np.array(e)) if len(s) >= 3 else (None, None)
 
-    C2D_Jm2 = None
-    if A0:
-        C2D_Jm2 = C2D_Jm2_from_d2E(d2E, A0)
-        print(f"  C2D = {C2D_Jm2:.2f} J/m^2")
 
-    # --- E1 ---
-    E1_vbm = None
-    vbm_r2 = None
-    try:
-        if input("\n  -->> 输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
-            print("  输入 应变(%)  E_VBM(eV), 空行结束")
-            raw = _input_data("")
-            s_vbm, e_vbm = [], []
-            for line in raw:
-                parts = line.split()
-                if len(parts) >= 2:
-                    s_vbm.append(float(parts[0]) / 100)
-                    e_vbm.append(float(parts[1]))
-            if len(s_vbm) >= 3:
-                E1_vbm, vbm_r2, vc = fit_E1(np.array(s_vbm), np.array(e_vbm))
-                print(f"  E1 (VBM) = {E1_vbm:.4f} eV,  R^2 = {vbm_r2:.6f}")
-    except (EOFError, KeyboardInterrupt):
-        pass
+def main_mobility():
+    """交互式载流子迁移率计算 (x + y 双方向)"""
+    print("=" * 65)
+    print("  spinlife — 载流子迁移率计算")
+    print("  (Deformation Potential Theory)")
+    print("=" * 65)
+    print()
+    print("  μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)")
 
-    E1_cbm = None
-    cbm_r2 = None
-    try:
-        if input("\n  -->> 输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
-            print("  输入 应变(%)  E_CBM(eV), 空行结束")
-            raw = _input_data("")
-            s_cbm, e_cbm = [], []
-            for line in raw:
-                parts = line.split()
-                if len(parts) >= 2:
-                    s_cbm.append(float(parts[0]) / 100)
-                    e_cbm.append(float(parts[1]))
-            if len(s_cbm) >= 3:
-                E1_cbm, cbm_r2, cc = fit_E1(np.array(s_cbm), np.array(e_cbm))
-                print(f"  E1 (CBM) = {E1_cbm:.4f} eV,  R^2 = {cbm_r2:.6f}")
-    except (EOFError, KeyboardInterrupt):
-        pass
-
-    # --- 有效质量 + 温度 ---
-    m_vbm = m_cbm = None
     T = 300
     try:
-        if E1_vbm is not None:
-            m_vbm = float(input("\n  -->> m* (VBM, m0): "))
-        if E1_cbm is not None:
-            m_cbm = float(input("  -->> m* (CBM, m0): "))
-        T = float(input(f"  -->> T (K) [{T}]: ") or T)
+        T = float(input(f"\n  -->> 温度 T (K) [{T}]: ") or T)
     except (EOFError, KeyboardInterrupt):
         pass
 
-    # --- 计算 ---
-    print(f"\n--- Results ({direction if direction else '-'}) ---")
-    results = []
-    if C2D_Jm2 and E1_vbm and m_vbm:
-        mu_h, tau_p_h = calc_mu(C2D_Jm2, E1_vbm, m_vbm, T)
-        print(f"  空穴 (VBM):  mu = {mu_h:.2f} cm^2/V.s,  tau_p = {tau_p_h:.4f} ps")
-        results.append(('hole(VBM)', mu_h, tau_p_h, m_vbm, E1_vbm))
-    if C2D_Jm2 and E1_cbm and m_cbm:
-        mu_e, tau_p_e = calc_mu(C2D_Jm2, E1_cbm, m_cbm, T)
-        print(f"  电子 (CBM):  mu = {mu_e:.2f} cm^2/V.s,  tau_p = {tau_p_e:.4f} ps")
-        results.append(('electron(CBM)', mu_e, tau_p_e, m_cbm, E1_cbm))
+    all_data = {}
+
+    for dir_label in ('x', 'y'):
+        # 如果 y 方向可选, 询问是否跳过
+        if dir_label == 'y' and all_data:
+            try:
+                if input("\n  -->> 输入 Y 方向数据？(y/n, 默认n): ").strip().lower() != 'y':
+                    break
+            except (EOFError, KeyboardInterrupt):
+                break
+
+        print()
+        print("=" * 65)
+        print(f"  [{dir_label.upper()}] 方向")
+        print("=" * 65)
+
+        # --- C2D ---
+        print()
+        print("  C2D — 应变 vs 总能量:")
+        strain, energy = _input_strain_data()
+        if strain is None:
+            print("  [数据不足, 跳过]")
+            continue
+
+        d2E, r2_e, coeffs = fit_C2D(strain, energy)
+        A2, A1, A0_fit = coeffs
+        print(f"\n  Fit: E = {A2:.4f}*eps^2 + {A1:.4f}*eps + {A0_fit:.6f}")
+        print(f"  d2E/deps2 = {d2E:.4f} eV,  R^2 = {r2_e:.6f}")
+
+        A0 = None
+        try:
+            poscar = input("  -->> POSCAR 路径 (留空手动输入 A0): ").strip()
+            if poscar:
+                A0 = read_POSCAR_A0(poscar)
+            if A0 is None:
+                A0 = float(input("  -->> A0 (A^2): "))
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+        C2D = C2D_Jm2_from_d2E(d2E, A0) if A0 else None
+        if C2D:
+            print(f"  C2D = {C2D:.2f} J/m^2")
+
+        # --- E1 ---
+        E1_vbm, E1_cbm = None, None
+        s_vbm_data, e_vbm_data = None, None
+        s_cbm_data, e_cbm_data = None, None
+        try:
+            if input("\n  -->> 输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+                s_vbm_data, e_vbm_data = _input_E1_data(f"VBM ({dir_label})")
+                if s_vbm_data is not None:
+                    E1_vbm, vbm_r2, vc = fit_E1(s_vbm_data, e_vbm_data)
+                    print(f"  E1 (VBM) = {E1_vbm:.4f} eV,  R^2 = {vbm_r2:.6f}")
+
+            if input("\n  -->> 输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+                s_cbm_data, e_cbm_data = _input_E1_data(f"CBM ({dir_label})")
+                if s_cbm_data is not None:
+                    E1_cbm, cbm_r2, cc = fit_E1(s_cbm_data, e_cbm_data)
+                    print(f"  E1 (CBM) = {E1_cbm:.4f} eV,  R^2 = {cbm_r2:.6f}")
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+        # --- 有效质量 (各向异性) ---
+        m_vbm, m_cbm = None, None
+        try:
+            if E1_vbm is not None:
+                m_vbm = float(input(f"\n  -->> m* (VBM, {dir_label}方向, m0): "))
+            if E1_cbm is not None:
+                m_cbm = float(input(f"  -->> m* (CBM, {dir_label}方向, m0): "))
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+        all_data[dir_label] = {
+            'strain': strain, 'energy': energy, 'coeffs': coeffs,
+            'd2E': d2E, 'r2_e': r2_e, 'A0': A0, 'C2D': C2D,
+            'E1_vbm': E1_vbm, 'E1_cbm': E1_cbm,
+            's_vbm': s_vbm_data, 'e_vbm': e_vbm_data,
+            's_cbm': s_cbm_data, 'e_cbm': e_cbm_data,
+            'm_vbm': m_vbm, 'm_cbm': m_cbm,
+            'vc': vc if E1_vbm else None,
+            'cc': cc if E1_cbm else None,
+        }
+
+    if not all_data:
+        print("  [无有效数据]")
+        return
+
+    # --- 计算迁移率 ---
+    print()
+    print("=" * 65)
+    print("  Results")
+    print("=" * 65)
+    for d in ('x', 'y'):
+        if d not in all_data:
+            continue
+        dat = all_data[d]
+        print(f"\n  [{d.upper()}]  C2D = {dat['C2D']:.2f} J/m^2" if dat['C2D'] else f"\n  [{d.upper()}]")
+        if dat['E1_vbm'] and dat['m_vbm'] and dat['C2D']:
+            mu_h, tau_h = calc_mu(dat['C2D'], dat['E1_vbm'], dat['m_vbm'], T)
+            dat['mu_h'], dat['tau_h'] = mu_h, tau_h
+            print(f"  空穴 (VBM): μ = {mu_h:.2f} cm^2/V.s,  τ_p = {tau_h:.4f} ps")
+        if dat['E1_cbm'] and dat['m_cbm'] and dat['C2D']:
+            mu_e, tau_e = calc_mu(dat['C2D'], dat['E1_cbm'], dat['m_cbm'], T)
+            dat['mu_e'], dat['tau_e'] = mu_e, tau_e
+            print(f"  电子 (CBM): μ = {mu_e:.2f} cm^2/V.s,  τ_p = {tau_e:.4f} ps")
+
+    # --- 对比表 ---
+    if 'x' in all_data and 'y' in all_data:
+        print()
+        print("=" * 65)
+        print("  Comparison: X vs Y")
+        print("=" * 65)
+        rows = [
+            ('C2D (J/m^2)',        'C2D',  '{:.2f}'),
+            ('E1_VBM (eV)',        'E1_vbm', '{:.4f}'),
+            ('E1_CBM (eV)',        'E1_cbm', '{:.4f}'),
+            ('mu_h (cm^2/V.s)',    'mu_h',   '{:.2f}'),
+            ('mu_e (cm^2/V.s)',    'mu_e',   '{:.2f}'),
+            ('tau_p_h (ps)',       'tau_h',  '{:.4f}'),
+            ('tau_p_e (ps)',       'tau_e',  '{:.4f}'),
+            ('m*_VBM (m0)',        'm_vbm',  '{:.4f}'),
+            ('m*_CBM (m0)',        'm_cbm',  '{:.4f}'),
+        ]
+        print(f"  {'':>20}  {'X':>14}  {'Y':>14}")
+        print(f"  {'-'*52}")
+        for label, key, fmt in rows:
+            xv = all_data['x'].get(key)
+            yv = all_data['y'].get(key)
+            xs = fmt.format(xv) if xv is not None else '-'
+            ys = fmt.format(yv) if yv is not None else '-'
+            print(f"  {label:>20}  {xs:>14}  {ys:>14}")
 
     # --- 绘图 ---
     if _HAS_MPL:
+        ndir = len(all_data)
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        colors = {'x': '#E24A33', 'y': '#348ABD'}
+        markers = {'x': 'o', 'y': 's'}
         # C2D
         ax = axes[0]
-        xs = np.linspace(min(strain), max(strain), 200)
-        ys = np.polyval(coeffs, xs)
-        ax.plot(np.array(strain)*100, energy, 'o', ms=8, label='data')
-        ax.plot(xs*100, ys, '-',
-                label=rf'fit: {A2:.2f}$\varepsilon^2$ + {A1:.2f}$\varepsilon$')
-        ax.axhline(energy[len(energy)//2], color='gray', ls='--', alpha=0.4)
+        for d, dat in [('x', all_data.get('x')), ('y', all_data.get('y'))]:
+            if dat is None:
+                continue
+            strain, energy = dat['strain'], dat['energy']
+            coeffs = dat['coeffs']
+            xs = np.linspace(min(strain), max(strain), 200)
+            ys = np.polyval(coeffs, xs)
+            ax.plot(np.array(strain)*100, energy, markers[d], ms=8, color=colors[d], label=f'{d.upper()} data')
+            ax.plot(xs*100, ys, '-', color=colors[d], alpha=0.7, label=f'{d.upper()} fit')
+        ax.axhline(0, color='gray', ls='--', alpha=0.3)
         ax.set_xlabel('Strain (%)')
         ax.set_ylabel('Total Energy (eV)')
         ax.legend(fontsize=9)
-        ax.set_title(f'C2D Fit ({direction})')
+        ax.set_title('C2D Fit')
         ax.grid(alpha=0.3)
         # E1
         ax = axes[1]
-        if E1_vbm and len(s_vbm) > 0:
-            xs = np.linspace(min(s_vbm), max(s_vbm), 200)
-            ys = np.polyval(vc, xs)
-            ax.plot(np.array(s_vbm)*100, e_vbm, 's', ms=8, label=f'VBM (E1={E1_vbm:.3f}eV)')
-            ax.plot(xs*100, ys, '-')
-        if E1_cbm and len(s_cbm) > 0:
-            xs = np.linspace(min(s_cbm), max(s_cbm), 200)
-            ys = np.polyval(cc, xs)
-            ax.plot(np.array(s_cbm)*100, e_cbm, 'o', ms=8, label=f'CBM (E1={E1_cbm:.3f}eV)')
-            ax.plot(xs*100, ys, '--')
-        ax.axhline(0, color='gray', ls='--', alpha=0.4)
+        for d, dat in [('x', all_data.get('x')), ('y', all_data.get('y'))]:
+            if dat is None:
+                continue
+            if dat.get('E1_vbm') and dat.get('s_vbm') is not None:
+                xs = np.linspace(min(dat['s_vbm']), max(dat['s_vbm']), 200)
+                ys = np.polyval(dat['vc'], xs)
+                ax.plot(np.array(dat['s_vbm'])*100, dat['e_vbm'], markers[d], ms=8,
+                        color=colors[d], label=f"VBM {d.upper()} (E1={dat['E1_vbm']:.3f})")
+                ax.plot(xs*100, ys, '-', color=colors[d], alpha=0.5)
+            if dat.get('E1_cbm') and dat.get('s_cbm') is not None:
+                xs = np.linspace(min(dat['s_cbm']), max(dat['s_cbm']), 200)
+                ys = np.polyval(dat['cc'], xs)
+                ax.plot(np.array(dat['s_cbm'])*100, dat['e_cbm'], markers[d], ms=8,
+                        color=colors[d], label=f"CBM {d.upper()} (E1={dat['E1_cbm']:.3f})",
+                        fillstyle='none')
+                ax.plot(xs*100, ys, '--', color=colors[d], alpha=0.5)
+        ax.axhline(0, color='gray', ls='--', alpha=0.3)
         ax.set_xlabel('Strain (%)')
         ax.set_ylabel('Band Energy (eV)')
         ax.legend(fontsize=9)
-        ax.set_title(f'E1 Fit ({direction})')
+        ax.set_title('E1 Fit')
         ax.grid(alpha=0.3)
         plt.tight_layout()
         plt.savefig('mobility_fit.png', dpi=200, bbox_inches='tight')
         plt.close()
-        print(f"  [Plot: mobility_fit.png]")
+        print(f"\n  [Plot: mobility_fit.png]")
 
     # --- 报告 ---
     with open('mobility_report.txt', 'w') as f:
         f.write("spinlife.mobility -- Carrier Mobility Report\n")
         f.write("=" * 45 + "\n")
-        f.write(f"Direction: {direction if direction else '-'}\n")
-        f.write(f"T: {T} K\n")
-        f.write(f"C2D: {C2D_Jm2:.4f} J/m^2\n" if C2D_Jm2 else "")
-        f.write(f"d2E/deps2: {d2E:.4f} eV, R^2: {r2_e:.6f}\n")
-        if A0:
-            f.write(f"A0: {A0:.2f} A^2\n")
-        if E1_vbm:
-            f.write(f"E1_VBM: {E1_vbm:.4f} eV, R^2: {vbm_r2:.6f}\n")
-        if E1_cbm:
-            f.write(f"E1_CBM: {E1_cbm:.4f} eV, R^2: {cbm_r2:.6f}\n")
-        if results:
-            f.write("\n--- Results ---\n")
-            for name, mu, tau_p, ms, e1 in results:
-                f.write(f"{name}: mu = {mu:.2f} cm^2/V.s,  tau_p = {tau_p:.4f} ps\n")
+        f.write(f"T: {T} K\n\n")
+        for d, dat in [('x', all_data.get('x')), ('y', all_data.get('y'))]:
+            if dat is None:
+                continue
+            f.write(f"--- {d.upper()} ---\n")
+            if dat.get('C2D'):
+                f.write(f"C2D: {dat['C2D']:.4f} J/m^2\n")
+                f.write(f"d2E/deps2: {dat['d2E']:.4f} eV, R^2: {dat['r2_e']:.6f}\n")
+            if dat.get('A0'):
+                f.write(f"A0: {dat['A0']:.2f} A^2\n")
+            if dat.get('E1_vbm'):
+                f.write(f"E1_VBM: {dat['E1_vbm']:.4f} eV\n")
+            if dat.get('E1_cbm'):
+                f.write(f"E1_CBM: {dat['E1_cbm']:.4f} eV\n")
+            if dat.get('mu_h'):
+                f.write(f"mu_h: {dat['mu_h']:.2f} cm^2/V.s, tau_p: {dat['tau_h']:.4f} ps\n")
+            if dat.get('mu_e'):
+                f.write(f"mu_e: {dat['mu_e']:.2f} cm^2/V.s, tau_p: {dat['tau_e']:.4f} ps\n")
+            f.write("\n")
     print(f"\n  [Report: mobility_report.txt]")
     print("=" * 65)
 
