@@ -76,3 +76,15 @@ def C2D_Jm2_from_d2E(d2E_eV, A0_A2):
     return (d2E_eV / A0_A2) * eV_to_J / 1e-20
 
 
+def read_POSCAR_a(path):
+    """从 POSCAR 读晶格常数 a (Å) — 第一晶格矢量长度."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, 'r') as f:
+        lines = f.readlines()
+    scale = float(lines[1].strip())
+    a_vec = [float(x) * scale for x in lines[2].split()[:3]]
+    a = np.sqrt(a_vec[0]**2 + a_vec[1]**2 + a_vec[2]**2)
+    return a
+
+

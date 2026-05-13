@@ -9,7 +9,9 @@ def read_bands(filepath):
     """
     读 wannier90_band.dat
 
-    Format: index  kx  ky  kz  E1  E2 ... Enbands
+    支持两种格式:
+      A) index  kx  ky  kz  E1  E2 ... Enbands  (有索引列)
+      B) kx  ky  kz  E1  E2 ... Enbands          (无索引列)
 
     Returns
     -------
@@ -22,10 +24,29 @@ def read_bands(filepath):
     if data.ndim == 1:
         data = data.reshape(1, -1)
 
-    kpts = data[:, 1:4]
-    energies = data[:, 4:]
-    nk, nbands = energies.shape
+    ncols = data.shape[1]
 
+    if ncols == 4:
+        # 格式 B: kx ky kz E (单带, 无索引)
+        kpts = data[:, :3]
+        energies = data[:, 3:4]
+    elif ncols > 4:
+        # 判断第一列是否为整数索引 (格式 A)
+        first_col = data[:, 0]
+        if np.all(np.abs(first_col - np.round(first_col)) < 1e-6) and first_col[0] < 10:
+            # 格式 A: index kx ky kz E1 E2 ...
+            kpts = data[:, 1:4]
+            energies = data[:, 4:]
+        else:
+            # 格式 B: kx ky kz E1 E2 ...
+            kpts = data[:, :3]
+            energies = data[:, 3:]
+    else:
+        raise ValueError(
+            f"无法解析能带文件: {ncols} 列 (需要 ≥4 列)\n"
+            f"期望格式: index kx ky kz E1 E2 ...")
+
+    nk, nbands = energies.shape
     k_frac = np.zeros(nk)
     for i in range(1, nk):
         k_frac[i] = k_frac[i - 1] + np.sqrt(np.sum((kpts[i] - kpts[i - 1]) ** 2))

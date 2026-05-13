@@ -44,7 +44,8 @@ except ImportError:
 
 from spinlife.read_procar import PROCAR
 from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
-from spinlife.mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
+from spinlife.mobility.calc_mobility import (read_POSCAR_A0, read_POSCAR_a,
+                                             fit_C2D, fit_E1,
                                              calc_mu, C2D_Jm2_from_d2E,
                                              m0, e_ch)
 from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice, read_labelinfo
@@ -824,12 +825,20 @@ def main_effmass_wannier():
 
     k_frac, energies, nk, nbands = read_bands(path)
     print(f"  能带范围: 1 - {nbands},  k 点数: {nk}")
+    if nbands == 0:
+        print("  [错误: 未解析到能带, 文件格式可能不正确]")
+        return
 
-    # 读取高对称点标签
-    labelinfo_path = path + '.labelinfo.dat'
-    labels = read_labelinfo(labelinfo_path) if os.path.exists(labelinfo_path) else []
-
-    a = float(input("  -->> 晶格常数 a (Å): ").strip())
+    # 从 POSCAR 自动读取晶格常数
+    a = None
+    for poscar_name in ['POSCAR', 'CONTCAR']:
+        if os.path.exists(poscar_name):
+            a = read_POSCAR_a(poscar_name)
+            if a:
+                print(f"  晶格常数 a = {a:.4f} Å  (来自 {poscar_name})")
+                break
+    if not a:
+        a = float(input("  -->> 晶格常数 a (Å): ").strip())
     k = k_to_reciprocal(k_frac, a)
 
     # 显示参考能带 (含高对称点)
@@ -919,11 +928,22 @@ def main_alpha_beta():
     if path and os.path.exists(path):
         print("\n  [1/2] √(α²+β²) — Wannier SOC 能带拟合")
         k_frac, energies, nk, nbands = read_bands(path)
+        if nbands == 0:
+            print("  [错误: 未解析到能带, 文件格式可能不正确]")
+            return
         labelinfo_path = path + '.labelinfo.dat'
         labels = read_labelinfo(labelinfo_path) if os.path.exists(labelinfo_path) else []
         if labels:
             print(f"  高对称点: {' → '.join(lbl for _, _, lbl in labels)}")
-        a = float(input("  -->> 晶格常数 a (Å): "))
+        a = None
+        for poscar_name in ['POSCAR', 'CONTCAR']:
+            if os.path.exists(poscar_name):
+                a = read_POSCAR_a(poscar_name)
+                if a:
+                    print(f"  晶格常数 a = {a:.4f} Å  (来自 {poscar_name})")
+                    break
+        if not a:
+            a = float(input("  -->> 晶格常数 a (Å): "))
         k = k_to_reciprocal(k_frac, a)
 
         up = int(input(f"  -->> SOC 带对上能带 (1-{nbands}): ")) - 1
