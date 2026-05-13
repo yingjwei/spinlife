@@ -51,6 +51,7 @@ tr:hover { background: #f0f5ff; }
   3)  SOC 参数 α/β (Wannier + PROCAR)
   4)  自旋寿命 (结果整合 — 自动装载上下文)
   5)  导出能带数据
+  6)  生成 KPOINTS 文件 (Wannier → k₀ → 网格)
 
   0)  退出
 </pre>
@@ -59,6 +60,7 @@ tr:hover { background: #f0f5ff; }
 <p><b>选项 2:</b> 读 <code>wannier90_band.dat</code> → 抛物线拟合 → m* (密 k 网格, 可靠)</p>
 <p><b>选项 3:</b> Wannier 密能带 ΔE² vs k² 拟合 → √(α²+β²); PROCAR 自旋期望线性斜率拟合 → α/β 比值; 结合得 α, β</p>
 <p><b>选项 4:</b> 整合前三步结果, 自动装载已知的 m*, α, β, τ<sub>p</sub> → τ<sub>s</sub>, L<sub>PSH</sub></p>
+<p><b>选项 6:</b> 读 Wannier 能带 → 选 SOC 带对 → 自动定位 k₀ → 各方向独立设置密度 → 生成 KPOINTS</p>
 
 <!-- ============================================================ -->
 <h2>二、计算方法</h2>
@@ -195,6 +197,9 @@ python -m spinlife.main PROCAR --dump-band 44
 # 迁移率
 python -m spinlife.main mobility
 
+# KPOINTS 生成
+python -m spinlife.genkpoints [kx ky kz]
+
 # 直接执行
 python /path/to/spinlife/main.py
 </pre>
@@ -207,6 +212,7 @@ python /path/to/spinlife/main.py
   <li><b>有效质量 (选项 2)</b> → 读 <code>wannier90_band.dat</code>, 存 m*</li>
   <li><b>SOC α/β (选项 3)</b> → Wannier + PROCAR, 存 α, β</li>
   <li><b>迁移率 (选项 1)</b> → 应变计算, 存 μ, τ_p, T</li>
+  <li><b>KPOINTS (选项 6)</b> → 读 Wannier 能带, 选 SOC 带对, 生成密集 k 网格</li>
   <li><b>自旋寿命 (选项 4)</b> → 自动装载上述所有结果, 一键算出 τ<sub>s</sub>, L<sub>PSH</sub></li>
 </ol>
 
@@ -230,6 +236,7 @@ python /path/to/spinlife/main.py
 <tr><td><code>spinlife/soc_spin_fit.png</code></td><td>输出</td><td>PROCAR 自旋织构 ⟨σ⟩ vs k 拟合图</td></tr>
 <tr><td><code>spinlife/spinlife_report.txt</code></td><td>输出</td><td>τ<sub>s</sub>, L<sub>PSH</sub></td></tr>
 <tr><td><code>spinlife/spinlife_results.png</code></td><td>输出</td><td>SOC 能带 + ΔE² 拟合图</td></tr>
+<tr><td><code>KPOINTS</code></td><td>输出</td><td>genkpoints — 围绕 VBM/CBM 的密集 k 网格</td></tr>
 <tr><td colspan="3"><div class="note">所有输出文件统一保存在当前目录下的 <code>spinlife/</code> 文件夹中。</div></td></tr>
 </table>
 
@@ -244,6 +251,7 @@ python /path/to/spinlife/main.py
 <tr><td><code>spinlife/fit_soc.py</code></td><td>m*, α/β 拟合 + τ<sub>s</sub> 计算</td></tr>
 <tr><td><code>spinlife/wannier.py</code></td><td>Wannier90 能带文件解析 + k 空间转换</td></tr>
 <tr><td><code>spinlife/mobility/calc_mobility.py</code></td><td>C₂D, E₁, μ 计算</td></tr>
+<tr><td><code>spinlife/genkpoints.py</code></td><td>KPOINTS 网格生成 (围绕 VBM/CBM)</td></tr>
 <tr><td><code>docs/index.html</code></td><td>本文档</td></tr>
 </table>
 

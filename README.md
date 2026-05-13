@@ -28,6 +28,7 @@ python -m spinlife.main
   3)  SOC 参数 α/β                      Wannier ΔE² → √(α²+β²), PROCAR → α/β 比值
   4)  自旋寿命 (结果整合)               自动装载 m*, α, β, τ_p → τ_s, L_PSH
   5)  导出能带数据                      PROCAR / Wannier 原始数据导出
+  6)  生成 KPOINTS 文件                 读 Wannier → 选 SOC 带对 → 网格
 
   [m* = 4.3210 m0  |  a = 11.23 meV.A  |  b = 9.10 meV.A  |  tau_p = 0.1500 ps]
 ```
@@ -109,6 +110,7 @@ python -m spinlife.main PROCAR --dump-band 44
 | `spinlife/spinlife_report.txt` | 自旋寿命 | τ_s, L_PSH |
 | `spinlife/spinlife_results.png` | PROCAR | SOC 能带 + ΔE² 图 |
 | `spinlife/band_N_data.txt` | PROCAR --dump-band | k, E, ⟨σ⟩ |
+| `KPOINTS` | genkpoints | 围绕 VBM/CBM 的密集 k 网格 |
 
 ## QE → Perturbo (W6CCl16)
 
