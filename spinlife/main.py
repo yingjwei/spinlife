@@ -321,6 +321,7 @@ def _show_main_menu():
     print("  3)  SOC 参数 α/β (Wannier + PROCAR)")
     print("  4)  自旋寿命 (τ_s, L_PSH)")
     print("  5)  导出能带数据")
+    print("  6)  生成 KPOINTS 文件 (在指定 k 点附近生成密集网格)")
     print()
     summary = _ctx_summary()
     if summary:
@@ -350,10 +351,12 @@ def _interactive_menu():
             main_spin_lifetime_menu()
         elif c == '5':
             main_dump_band_menu()
+        elif c == '6':
+            main_genkpoints()
         else:
             print("  [无效选项]")
             continue
-        if c in ('1', '2', '3', '4', '5'):
+        if c in ('1', '2', '3', '4', '5', '6'):
             input("\n  -->> 按 Enter 返回菜单...")
 
 
@@ -1435,6 +1438,36 @@ def main_dump_band_menu():
             for i in range(nk):
                 f.write(f"{k[i]:.8f}  {energies[i, band]:.8f}\n")
         print(f"\n  [{nk} points -> {out}]")
+
+
+def main_genkpoints():
+    """选项 6: 生成 KPOINTS 文件"""
+    from spinlife.genkpoints import generate_grid, write_kpoints
+
+    print()
+    print("=" * 65)
+    print("  生成 KPOINTS 文件 — 在指定 k 点附近生成密集网格")
+    print("=" * 65)
+    print()
+
+    mstar_hint = ""
+    if _ctx['m_star']:
+        mstar_hint = f"  [当前 m* = {_ctx['m_star']:.4f} m₀, 可在 VBM 极值点附近生成]"
+
+    center = [
+        float(input(f"  Center kx (frac){mstar_hint}: ") or 0),
+        float(input(f"  Center ky (frac): ") or 0),
+        float(input(f"  Center kz (frac): ") or 0),
+    ]
+
+    k_range = float(input("  Range (±, frac coords) [0.05]: ") or 0.05)
+    n_div = int(input("  Divisions per direction [10]: ") or 10)
+    dim = int(input("  Dimension (2/3) [2]: ") or 2)
+    out = input("  Output filename [KPOINTS]: ").strip() or "KPOINTS"
+
+    kpoints = generate_grid(center, n_div, k_range, dim)
+    write_kpoints(out, kpoints,
+                  comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})")
 
 
 if __name__ == '__main__':
