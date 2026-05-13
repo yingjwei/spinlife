@@ -808,6 +808,75 @@ def main_mobility():
     print("=" * 65)
 
 
+def _plot_effmass_result(k, E, k0, m, r2, k_range, band_label, filename,
+                         E_offset=0, sym_k=None, sym_labels=None):
+    """绘制有效质量拟合图 (参考 fit_effective_mass.py 风格)"""
+    if not _HAS_MPL:
+        return
+    plt.rcParams['font.family'] = 'serif'
+    plt.rcParams['font.serif'] = ['Times New Roman']
+    plt.rcParams['mathtext.fontset'] = 'stix'
+    plt.rcParams['axes.linewidth'] = 1.2
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # 原始数据
+    ax.plot(k, E - E_offset, 'o', ms=6, color='#ff0000', label=f'{band_label}')
+
+    # 极值点
+    marker = 'v' if 'VBM' in band_label else '^'
+    ax.plot(k0, np.interp(k0, k, E) - E_offset, marker, ms=10, color='#0000ff', zorder=5)
+
+    # 拟合曲线
+    mask = np.abs(k - k0) <= k_range
+    if np.sum(mask) > 0:
+        k_fit = k[mask] - k0
+        E_fit = E[mask]
+        A = np.polyfit(k_fit**2, E_fit, 1)[0]
+        E0_fit = np.polyfit(k_fit**2, E_fit, 1)[1]
+        ks = np.linspace(-k_range, k_range, 200)
+        ax.plot(ks + k0, A * ks**2 + E0_fit - E_offset, '-', lw=2.5,
+                color='#0000ff', label='Parabolic fit')
+        ax.axvspan(k0 - k_range, k0 + k_range, alpha=0.06, color='#0000ff')
+
+    # 高对称点
+    if sym_k is not None and sym_labels is not None:
+        ymin, ymax = ax.get_ylim()
+        ax.set_xticks(sym_k)
+        ax.tick_params(axis='x', length=6, direction='out')
+        for sk, sl in zip(sym_k, sym_labels):
+            ax.axvline(sk, color='black', ls='--', lw=0.8, alpha=0.7)
+            ax.text(sk, ymin - 0.06 * (ymax - ymin), sl,
+                    ha='center', va='top', fontsize=18, color='black')
+
+    # 标注框
+    if m and r2:
+        txt = f'$m^*$ = {m:.1f} $m_0$\n$R^2$ = {r2:.3f}'
+        ax.text(0.97, 0.95, txt, transform=ax.transAxes, va='top', ha='right',
+                fontsize=14,
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
+                          edgecolor='black', linewidth=1.2))
+
+    ax.set_xlabel('')
+    ax.tick_params(axis='x', labelbottom=False)
+    ax.tick_params(axis='y', labelsize=14)
+    ax.set_ylabel('E (eV)', fontsize=18)
+    ax.legend(fontsize=14, frameon=True, edgecolor='black')
+    fig.tight_layout()
+    fig.savefig(filename, dpi=200)
+    plt.close(fig)
+    print(f"  [图片已保存: {filename}]")
+
+
+def _save_band_data_txt(k, E, band_index, base_name):
+    """保存能带数据到 txt 文件"""
+    out = os.path.join(OUTPUT_DIR, f'band{band_index}_data.txt')
+    data = np.column_stack((k, E))
+    header = f"Band {band_index}\nk (1/A)    E (eV)"
+    np.savetxt(out, data, fmt='%.8f', header=header)
+    print(f"  [数据已保存: {out}]")
+
+
 def main_effmass_wannier():
     """有效质量: 读 Wannier 能带 → 抛物线拟合 → m* (参考 fit_effective_mass.py)"""
     print()
@@ -820,117 +889,166 @@ def main_effmass_wannier():
         print(f"  [文件不存在]")
         return
 
-    # 使用参考代码的解析方式 (自动检测格式)
-    k, energies, nk, nbands = load_band_data(path)
-    print(f"  能带范围: 1 - {nbands},  k 点数: {nk}")
-
-    # 读取高对称点标签
+    # 先读 labelinfo → 获取 nk_expected (用于两列堆叠格式拆带)
     labelinfo_path = path + '.labelinfo.dat'
-    labels = read_labelinfo(labelinfo_path) if os.path.exists(labelinfo_path) else []
-    if labels:
-        print(f"  k 路径: {' → '.join(lbl for _, _, lbl in labels)}")
+    alt_labelinfo = os.path.join(os.path.dirname(path) or '.', 'wannier90.labelinfo.dat')
+    labels_info = []
+    if os.path.exists(labelinfo_path):
+        labels_info = read_labelinfo(labelinfo_path)
+    elif os.path.exists(alt_labelinfo):
+        labels_info = read_labelinfo(alt_labelinfo)
 
-    # 显示参考能带
-    mid = nk // 2
-    print(f"\n  参考能带 (路径中点):")
-    print(f"  {'Band':>6}  {'Energy(eV)':>12}")
-    print(f"  {'-'*22}")
-    low = max(0, nbands // 2 - 6)
-    high = min(nbands, nbands // 2 + 7)
-    for b in range(low, high):
-        print(f"  {b+1:>6}  {energies[mid, b]:>12.4f}")
+    nk_expected = labels_info[-1][0] + 1 if labels_info else None
+    if labels_info:
+        labels_str = ' → '.join(lbl for _, _, lbl in labels_info)
+        print(f"  k 路径: {labels_str}")
+        print(f"  总 k 点数: {nk_expected}")
 
-    band = int(input(f"\n  -->> 能带序号 (1-{nbands}): ")) - 1
-    mode = input("  -->> 极值类型 (VBM/CBM): ").strip().upper()
-    mode = 'max' if mode == 'VBM' else 'min'
+    # 解析能带数据
+    k, energies, nk, nbands = load_band_data(path, nk_expected)
+    print(f"  能带数: {nbands},  每条带 k 点数: {nk}")
+    print(f"  k 范围: {k[0]:.6f} ~ {k[-1]:.6f}")
 
-    energy = energies[:, band]
-    k0, idx0 = find_extremum(k, energy, mode)
-    print(f"  极值: k₀ = {k0:.4f},  E₀ = {energy[idx0]:.4f} eV")
+    # 高对称点信息
+    if labels_info:
+        print(f"\n--- k 路径 ---")
+        for kidx, kdist, lbl in labels_info:
+            print(f"  {lbl:>4s}  k_index={kidx},  k_dist={kdist:.4f}")
 
-    # 多范围拟合 (参考: 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15)
-    fit_ranges = [0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15]
-    print(f"\n  {'拟合范围':>8}  {'m*/m₀':>8}  {'R²':>8}  {'点数'}")
-    print(f"  {'-'*35}")
-
-    best_m, best_r2, best_kr = None, 0, None
-    for kr in fit_ranges:
-        m_star, r2, n_pts = fit_effmass(k, energy, k0, kr)
-        if m_star is None:
-            continue
-        flag = "  ← 最优" if (r2 > 0.97 and m_star < 999 and r2 > best_r2) else ""
-        if flag:
-            best_m, best_r2, best_kr = m_star, r2, kr
-        print(f"  k≤{kr:<.3f}   {m_star:>8.1f}  {r2:>7.3f}  {n_pts:3d}{flag}")
-
-    if best_m is None:
-        print("\n  [所有拟合 R² 均偏低, 带边可能非抛物线]")
+    # 用户输入 VBM 带序号
+    try:
+        band = int(input(f"\n  价带顶能带序号 (1-{nbands}): "))
+    except (EOFError, KeyboardInterrupt):
+        print(f"  [输入取消]")
+        return
+    if band < 1 or band > nbands:
+        print(f"  [错误: 能带序号超出范围 (1-{nbands})]")
         return
 
-    print(f"\n  → 推荐: m* = {best_m:.1f} m₀  (范围 ±{best_kr}, R² = {best_r2:.4f})")
-    _ctx['m_star'] = best_m
+    vbm_idx = band - 1
+    cbm_idx = vbm_idx + 1
 
-    # 保存报告
-    with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'w') as f:
-        f.write("Effective Mass Report (Wannier)\n")
-        f.write(f"File: {path}\n")
-        f.write(f"Band: {band+1}\n")
-        f.write(f"m* = {best_m:.4f} m₀\n")
-        f.write(f"R² = {best_r2:.6f}\n")
-        f.write(f"Fit range: ±{best_kr}\n")
-    print(f"  [报告 -> {OUTPUT_DIR}/effmass_report.txt]")
+    # 准备高对称点标注 (k 点数一致时才启用)
+    plot_sym_k = None
+    plot_sym_labels = None
+    if labels_info and nk_expected and len(k) == nk_expected:
+        plot_sym_k = [k[kidx] for kidx, _, _ in labels_info]
+        plot_sym_labels = [lbl.replace('GAMMA', 'Γ').replace('G', 'Γ')
+                          for _, _, lbl in labels_info]
 
-    # 绘图 (仿参考代码风格)
-    if _HAS_MPL:
-        plt.rcParams['font.family'] = 'serif'
-        plt.rcParams['font.serif'] = ['Times New Roman']
-        plt.rcParams['axes.linewidth'] = 1.2
+    fit_ranges = [0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15]
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        # 数据点
-        ax.plot(k, energy, 'o', ms=5, color='#E24A33', label=f'Band {band+1}')
-        # 极值点
-        marker = 'v' if mode == 'max' else '^'
-        ax.plot(k0, energy[idx0], marker, ms=10, color='#0000ff', zorder=5)
-        # 拟合抛物线
-        mask = np.abs(k - k0) <= best_kr
-        if np.sum(mask) > 0:
-            k_fit = k[mask] - k0
-            E_fit = energy[mask]
-            coeffs = np.polyfit(k_fit**2, E_fit, 1)
-            A, E0_fit = coeffs[0], coeffs[1]
-            ks = np.linspace(-best_kr, best_kr, 200)
-            Es = A * ks**2 + E0_fit
-            ax.plot(ks + k0, Es, '-', lw=2.5, color='#0000ff', label='Parabolic fit')
-            ax.axvspan(k0 - best_kr, k0 + best_kr, alpha=0.06, color='#0000ff')
-        # 高对称点标注
-        if labels:
-            sym_ks = []
-            sym_lbls = []
-            for kidx, kdist, lbl in labels:
-                if kidx < len(k):
-                    sym_ks.append(k[kidx])
-                    sym_lbls.append(lbl.replace('GAMMA', 'Γ'))
-            if sym_ks:
-                ymin, ymax = ax.get_ylim()
-                ax.set_xticks(sym_ks)
-                for sk, sl in zip(sym_ks, sym_lbls):
-                    ax.axvline(sk, color='black', ls='--', lw=0.8, alpha=0.5)
-                    ax.text(sk, ymin - 0.06 * (ymax - ymin), sl,
-                            ha='center', va='top', fontsize=14, color='black')
-                ax.tick_params(axis='x', length=6)
-        # 标注框
-        txt = f'$m^*$ = {best_m:.1f} $m_0$\n$R^2$ = {best_r2:.3f}'
-        ax.text(0.97, 0.95, txt, transform=ax.transAxes, va='top', ha='right',
-                fontsize=13, bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
-                                       edgecolor='black', linewidth=1.2))
-        ax.tick_params(axis='y', labelsize=13)
-        ax.set_ylabel('E (eV)', fontsize=15)
-        ax.legend(fontsize=12, frameon=True, edgecolor='black')
-        fig.tight_layout()
-        fig.savefig(os.path.join(OUTPUT_DIR, 'effmass_fit.png'), dpi=200)
-        plt.close(fig)
-        print(f"  [Plot -> {OUTPUT_DIR}/effmass_fit.png]")
+    # ===== VBM 有效质量 =====
+    E_vbm = energies[:, vbm_idx]
+    k_vbm = k[np.argmax(E_vbm)]
+    vbm_arg = np.argmax(E_vbm)
+
+    print(f"\n{'='*60}")
+    print(f"  VBM (Band {band})")
+    print(f"{'='*60}")
+    print(f"  位置: k = {k_vbm:.6f}")
+    print(f"  能量: E = {E_vbm[vbm_arg]:.6f} eV")
+    print(f"\n{'拟合范围':>10s}  {'m*/m0':>8s}  {'R²':>8s}  {'点数'}")
+
+    best_vbm, best_r2_vbm, best_kr_vbm = None, 0, None
+    for kr in fit_ranges:
+        m_star, r2, n_pts = fit_effmass(k, E_vbm, k_vbm, kr)
+        if m_star is None:
+            continue
+        if r2 > best_r2_vbm and m_star < 999:
+            best_r2_vbm = r2
+            best_vbm = m_star
+            best_kr_vbm = kr
+        n = np.sum(np.abs(k - k_vbm) <= kr)
+        flag = "  ← 最优" if (r2 > 0.97 and m_star == best_vbm) else ""
+        print(f"  k≤{kr:<.3f}   {m_star:>8.1f}  {r2:>7.3f}  {n:3d}{flag}")
+
+    if best_vbm:
+        print(f"\n  → VBM: m* = {best_vbm:.1f} m₀  (范围 ±{best_kr_vbm}, R² = {best_r2_vbm:.4f})")
+        _ctx['m_star'] = best_vbm
+
+        # 保存数据
+        _save_band_data_txt(k, E_vbm, band, path)
+
+        # 报告
+        with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'w') as f:
+            f.write("Effective Mass Report (Wannier)\n")
+            f.write(f"File: {path}\n")
+            f.write(f"VBM Band: {band}\n")
+            f.write(f"m*_VBM = {best_vbm:.4f} m₀\n")
+            f.write(f"R²_VBM = {best_r2_vbm:.6f}\n")
+            f.write(f"Fit range: ±{best_kr_vbm}\n")
+        print(f"  [报告 -> {OUTPUT_DIR}/effmass_report.txt]")
+
+        # 绘图
+        _plot_effmass_result(k, E_vbm, k_vbm, best_vbm, best_r2_vbm, best_kr_vbm,
+                             f"Band {band} (VBM)",
+                             os.path.join(OUTPUT_DIR, 'effmass_fit.png'),
+                             E_offset=E_vbm[vbm_arg],
+                             sym_k=plot_sym_k, sym_labels=plot_sym_labels)
+    else:
+        print("  VBM 拟合失败 (所有 R² 偏低)")
+
+    # ===== CBM 有效质量 =====
+    if cbm_idx < nbands:
+        E_cbm = energies[:, cbm_idx]
+        k_cbm = k[np.argmin(E_cbm)]
+        cbm_arg = np.argmin(E_cbm)
+
+        print(f"\n{'='*60}")
+        print(f"  CBM (Band {band+1})")
+        print(f"{'='*60}")
+        print(f"  位置: k = {k_cbm:.6f}")
+        print(f"  能量: E = {E_cbm[cbm_arg]:.6f} eV")
+        print(f"\n{'拟合范围':>10s}  {'m*/m0':>8s}  {'R²':>8s}  {'点数'}")
+
+        best_cbm, best_r2_cbm, best_kr_cbm = None, 0, None
+        for kr in fit_ranges:
+            m_star, r2, n_pts = fit_effmass(k, E_cbm, k_cbm, kr)
+            if m_star is None:
+                continue
+            if r2 > best_r2_cbm and m_star < 999:
+                best_r2_cbm = r2
+                best_cbm = m_star
+                best_kr_cbm = kr
+            n = np.sum(np.abs(k - k_cbm) <= kr)
+            flag = "  ← 最优" if (r2 > 0.97 and m_star == best_cbm) else ""
+            print(f"  k≤{kr:<.3f}   {m_star:>8.1f}  {r2:>7.3f}  {n:3d}{flag}")
+
+        if best_cbm:
+            print(f"\n  → CBM: m* = {best_cbm:.1f} m₀  (范围 ±{best_kr_cbm}, R² = {best_r2_cbm:.4f})")
+            _save_band_data_txt(k, E_cbm, band + 1, path)
+            _plot_effmass_result(k, E_cbm, k_cbm, best_cbm, best_r2_cbm, best_kr_cbm,
+                                 f"Band {band+1} (CBM)",
+                                 os.path.join(OUTPUT_DIR, 'effmass_cbm_fit.png'),
+                                 E_offset=E_cbm[cbm_arg],
+                                 sym_k=plot_sym_k, sym_labels=plot_sym_labels)
+
+            # 带隙
+            gap = np.min(E_cbm) - np.max(E_vbm)
+            print(f"\n  Eg (Band {band} - {band+1}) = {gap:.4f} eV")
+
+            # 追加 CBM 到报告
+            with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'a') as f:
+                f.write(f"\nCBM Band: {band+1}\n")
+                f.write(f"m*_CBM = {best_cbm:.4f} m₀\n")
+                f.write(f"R²_CBM = {best_r2_cbm:.6f}\n")
+                f.write(f"Fit range: ±{best_kr_cbm}\n")
+                f.write(f"Eg = {gap:.4f} eV\n")
+        else:
+            print("  CBM 拟合失败 (所有 R² 偏低)")
+
+    # 总结
+    print(f"\n{'='*60}")
+    print(f"  推荐参数")
+    print(f"{'='*60}")
+    if best_vbm:
+        print(f"  m*_VBM = {best_vbm:.1f} m₀  (R²={best_r2_vbm:.3f})")
+    if cbm_idx < nbands and best_cbm:
+        print(f"  m*_CBM = {best_cbm:.1f} m₀  (R²={best_r2_cbm:.3f})")
+        if 'gap' in locals():
+            print(f"  Eg     = {gap:.4f} eV")
+    print(f"\n  说明: 选取 R² > 0.97 的最小范围结果为最佳")
 
 
 def main_alpha_beta():

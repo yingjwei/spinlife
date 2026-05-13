@@ -75,20 +75,35 @@ def band_slice(k, energy, k0, k_range):
     return k[mask], energy[mask]
 
 
-def load_band_data(filename):
+def _detect_nk_per_band(k_raw):
+    """从 k 值重复位置自动检测每条带点数 (两列堆叠格式用)."""
+    n = len(k_raw)
+    k0 = k_raw[0]
+    for i in range(50, min(n, 5000)):
+        if abs(k_raw[i] - k0) < 1e-14 and n % i == 0:
+            return i
+    return None
+
+
+def load_band_data(filename, nk_expected=None):
     """
     读 wannier90_band.dat, 自动判断格式 (参考 fit_effective_mass.py).
 
-    支持三种格式:
+    支持:
       1. 空行分隔: 每条带一个数据块, 块间有空行
       2. # Band-Index 头分隔
-      3. 纯两列堆叠: 所有带 (k, E) 直接拼接
+      3. 两列堆叠: (k, E) 按 (nbands, nk) 堆叠, 需要 nk_expected 或自动检测
       4. 多列格式: k  E1  E2 ...
+
+    Parameters
+    ----------
+    nk_expected : int or None
+        labelinfo 提供的每条带 k 点数 (两列堆叠格式必需).
 
     Returns
     -------
-    k : (nk,) ndarray — k 坐标 (单位与文件一致, 一般是 Å⁻¹)
-    energies : (nk, nbands) ndarray — 能带能量 (eV)
+    k : (nk,) ndarray
+    energies : (nk, nbands) ndarray
     nk : int
     nbands : int
     """
@@ -114,14 +129,33 @@ def load_band_data(filename):
     if arr.ndim == 1:
         arr = arr.reshape(-1, 1)
 
+    total_rows = arr.shape[0]
+
     if arr.shape[1] >= 3:
         # 多列格式: k  E1  E2  ...
-        return arr[:, 0], arr[:, 1:], arr.shape[0], arr.shape[1] - 1
-    elif arr.shape[1] == 2:
-        # 两列: k  E  (单带)
-        return arr[:, 0], arr[:, 1:2], arr.shape[0], 1
-    else:
-        raise ValueError(f"无法解析: {arr.shape[1]} 列 (需要 ≥2 列)")
+        return arr[:, 0], arr[:, 1:], total_rows, arr.shape[1] - 1
+
+    if arr.shape[1] == 2:
+        k_raw = arr[:, 0]
+
+        # 两列堆叠: 用 labelinfo nk 拆出多条带
+        if nk_expected and total_rows % nk_expected == 0:
+            n_bands = total_rows // nk_expected
+            print(f"  [两列堆叠: {n_bands} 条带 x {nk_expected} k点]")
+            return k_raw[:nk_expected], arr[:, 1].reshape(n_bands, nk_expected).T, nk_expected, n_bands
+
+        # 自动检测 nk
+        auto_nk = _detect_nk_per_band(k_raw)
+        if auto_nk and total_rows % auto_nk == 0:
+            n_bands = total_rows // auto_nk
+            print(f"  [两列堆叠: {n_bands} 条带 x {auto_nk} k点 (自动检测)]")
+            return k_raw[:auto_nk], arr[:, 1].reshape(n_bands, auto_nk).T, auto_nk, n_bands
+
+        # 回退: 单条带
+        print(f"  [单条带, {total_rows} k点]")
+        return k_raw, arr[:, 1:2], total_rows, 1
+
+    raise ValueError(f"无法解析: {arr.shape[1]} 列 (需要 ≥2 列)")
 
 
 def _parse_blank_separated(raw_text):
@@ -199,25 +233,17 @@ def read_labelinfo(filepath):
     """
     读 wannier90_band.labelinfo.dat — 高对称点标签.
 
-    Format: k_index  k_distance  label
+    Standard Wannier90 format: label  index(1-based)  k_distance  kx  ky  kz
 
     Returns
     -------
-    labels : list of (k_index, k_distance, label_str)
-        k_index is 0-based, k_distance is cumulative fractional k.
+    labels : list of (k_index_0based, k_distance, label_str)
     """
+    data = np.loadtxt(filepath, dtype=str)
     labels = []
-    with open(filepath, 'r') as f:
-        for line in f:
-            if line.startswith('#') or line.startswith('#'):
-                continue
-            parts = line.strip().split()
-            if len(parts) >= 3:
-                try:
-                    kidx = int(parts[0]) - 1  # 1-based → 0-based
-                    kdist = float(parts[1])
-                    label = parts[2]
-                    labels.append((kidx, kdist, label))
-                except ValueError:
-                    continue
+    for row in data:
+        label = row[0]
+        idx = int(row[1]) - 1  # 1-based → 0-based
+        kdist = float(row[2])
+        labels.append((idx, kdist, label))
     return labels
