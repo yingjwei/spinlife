@@ -1,27 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-spinlife — VASP PROCAR 自旋寿命计算流水线
+spinlife — VASP PROCAR 自旋寿命 + 载流子迁移率计算
 
-用法:
+子命令:
+  python -m spinlife.main PROCAR [options]        自旋寿命 (PROCAR -> alpha/beta/tau_s)
+  python -m spinlife.main mobility [options]       载流子迁移率 (形变势理论)
+  python -m spinlife.main PROCAR --dump-band N    导出能带原始数据 (用于校验)
+
+自旋寿命用法:
   python -m spinlife.main PROCAR [--vbm N] [--cbm N] [--tau-p 0.1]
          [--k-range 0.05] [--T 300] [--output-dir .]
          [--soc-vbm UPPER LOWER] [--soc-cbm UPPER LOWER]
          [--dump-band N]
 
-步骤:
-  1. 解析 PROCAR -> k 点、能带能量、自旋期望值
-  2. 自动检测 VBM/CBM (或用户指定)
-  3. 交互式选择 SOC 带对 (或 --soc-vbm/--soc-cbm 指定)
-  4. 拟合有效质量 m*
-  5. 拟合 sqrt(a^2+b^2) + 分离 alpha, beta
-  6. 计算自旋寿命 tau_s + PSH 周期 L_PSH
-  7. 绘图 + 输出报告
-
-输出:
-  - 终端报告
-  - spinlife_report.txt   文本报告
-  - spinlife_results.png  拟合图 (VBM + CBM 双列)
-  - band_N_data.txt       --dump-band N 输出的单条能带原始数据
+迁移率用法:
+  python -m spinlife.main mobility
 """
 
 import sys
@@ -38,6 +31,8 @@ except ImportError:
 
 from .read_procar import PROCAR
 from .fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
+from .mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
+                                     calc_mu, C2D_Jm2_from_d2E)
 
 
 def build_k_grid(kpoints):
@@ -216,6 +211,10 @@ def main():
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         print(__doc__)
         sys.exit(0 if len(sys.argv) < 2 else 1)
+
+    if sys.argv[1] == 'mobility':
+        main_mobility()
+        return
 
     procar_file = sys.argv[1] if os.path.exists(sys.argv[1]) else None
     if not procar_file:
@@ -409,3 +408,192 @@ def main():
 
     print(f"\n  [Report: {report_path}]")
     print("=" * 65)
+
+
+def _input_data(prompt):
+    """读取多行数据, 空行结束"""
+    print(prompt)
+    lines = []
+    while True:
+        try:
+            line = input().strip()
+            if not line:
+                break
+            lines.append(line)
+        except (EOFError, KeyboardInterrupt):
+            break
+    return lines
+
+
+def main_mobility():
+    """交互式载流子迁移率计算"""
+    print("=" * 65)
+    print("  spinlife.mobility -- 载流子迁移率计算 (形变势理论)")
+    print("=" * 65)
+
+    # --- 方向 ---
+    direction = ''
+    try:
+        direction = input("\n  方向 (x/y, Enter跳过): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    # --- C2D: 应变-能量 ---
+    print("\n--- C2D (弹性模量) ---")
+    print("  输入 应变(%)  总能量(eV), 一行一个, 空行结束")
+    print("  例: -3 -277.65870")
+    raw = _input_data("  >>>")
+    strain = []
+    energy = []
+    for line in raw:
+        parts = line.split()
+        if len(parts) >= 2:
+            strain.append(float(parts[0]) / 100)
+            energy.append(float(parts[1]))
+    if len(strain) < 3:
+        print(f"  [至少需要3个数据点, 当前{len(strain)}个]")
+        return
+
+    d2E, r2_e, coeffs = fit_C2D(np.array(strain), np.array(energy))
+    A2, A1, A0_fit = coeffs
+    print(f"\n  Fit: E = {A2:.4f}*eps^2 + {A1:.4f}*eps + {A0_fit:.6f}")
+    print(f"  d2E/deps2 = {d2E:.4f} eV,  R^2 = {r2_e:.6f}")
+
+    # --- A0 ---
+    A0 = None
+    try:
+        poscar = input("  POSCAR 路径 (留空则手动输入 A0): ").strip()
+        if poscar:
+            A0 = read_POSCAR_A0(poscar)
+        if A0 is None:
+            A0 = float(input("  A0 (A^2): "))
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    C2D_Jm2 = None
+    if A0:
+        C2D_Jm2 = C2D_Jm2_from_d2E(d2E, A0)
+        print(f"  C2D = {C2D_Jm2:.2f} J/m^2")
+
+    # --- E1 ---
+    E1_vbm = None
+    vbm_r2 = None
+    try:
+        if input("\n  输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+            raw = _input_data("  输入 应变(%)  E_VBM(eV), 空行结束\n  >>>")
+            s_vbm, e_vbm = [], []
+            for line in raw:
+                parts = line.split()
+                if len(parts) >= 2:
+                    s_vbm.append(float(parts[0]) / 100)
+                    e_vbm.append(float(parts[1]))
+            if len(s_vbm) >= 3:
+                E1_vbm, vbm_r2, vc = fit_E1(np.array(s_vbm), np.array(e_vbm))
+                print(f"  E1 (VBM) = {E1_vbm:.4f} eV,  R^2 = {vbm_r2:.6f}")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    E1_cbm = None
+    cbm_r2 = None
+    try:
+        if input("\n  输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+            raw = _input_data("  输入 应变(%)  E_CBM(eV), 空行结束\n  >>>")
+            s_cbm, e_cbm = [], []
+            for line in raw:
+                parts = line.split()
+                if len(parts) >= 2:
+                    s_cbm.append(float(parts[0]) / 100)
+                    e_cbm.append(float(parts[1]))
+            if len(s_cbm) >= 3:
+                E1_cbm, cbm_r2, cc = fit_E1(np.array(s_cbm), np.array(e_cbm))
+                print(f"  E1 (CBM) = {E1_cbm:.4f} eV,  R^2 = {cbm_r2:.6f}")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    # --- 有效质量 + 温度 ---
+    m_vbm = m_cbm = None
+    T = 300
+    try:
+        if E1_vbm is not None:
+            m_vbm = float(input("\n  m* (VBM, m0): "))
+        if E1_cbm is not None:
+            m_cbm = float(input("  m* (CBM, m0): "))
+        T = float(input(f"  T (K) [{T}]: ") or T)
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+    # --- 计算 ---
+    print(f"\n--- Results ({direction if direction else ''}) ---")
+    results = []
+    if C2D_Jm2 and E1_vbm and m_vbm:
+        mu_h = calc_mu(C2D_Jm2, E1_vbm, m_vbm, T)
+        print(f"  空穴 (VBM):  mu = {mu_h:.2f} cm^2/V.s")
+        results.append(('hole(VBM)', mu_h, m_vbm, E1_vbm))
+    if C2D_Jm2 and E1_cbm and m_cbm:
+        mu_e = calc_mu(C2D_Jm2, E1_cbm, m_cbm, T)
+        print(f"  电子 (CBM):  mu = {mu_e:.2f} cm^2/V.s")
+        results.append(('electron(CBM)', mu_e, m_cbm, E1_cbm))
+
+    # --- 绘图 ---
+    if _HAS_MPL:
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        # C2D
+        ax = axes[0]
+        xs = np.linspace(min(strain), max(strain), 200)
+        ys = np.polyval(coeffs, xs)
+        ax.plot(np.array(strain)*100, energy, 'o', ms=8, label='data')
+        ax.plot(xs*100, ys, '-',
+                label=rf'fit: {A2:.2f}$\varepsilon^2$ + {A1:.2f}$\varepsilon$')
+        ax.axhline(energy[len(energy)//2], color='gray', ls='--', alpha=0.4)
+        ax.set_xlabel('Strain (%)')
+        ax.set_ylabel('Total Energy (eV)')
+        ax.legend(fontsize=9)
+        ax.set_title(f'C2D Fit ({direction})')
+        ax.grid(alpha=0.3)
+        # E1
+        ax = axes[1]
+        if E1_vbm and len(s_vbm) > 0:
+            xs = np.linspace(min(s_vbm), max(s_vbm), 200)
+            ys = np.polyval(vc, xs)
+            ax.plot(np.array(s_vbm)*100, e_vbm, 's', ms=8, label=f'VBM (E1={E1_vbm:.3f}eV)')
+            ax.plot(xs*100, ys, '-')
+        if E1_cbm and len(s_cbm) > 0:
+            xs = np.linspace(min(s_cbm), max(s_cbm), 200)
+            ys = np.polyval(cc, xs)
+            ax.plot(np.array(s_cbm)*100, e_cbm, 'o', ms=8, label=f'CBM (E1={E1_cbm:.3f}eV)')
+            ax.plot(xs*100, ys, '--')
+        ax.axhline(0, color='gray', ls='--', alpha=0.4)
+        ax.set_xlabel('Strain (%)')
+        ax.set_ylabel('Band Energy (eV)')
+        ax.legend(fontsize=9)
+        ax.set_title(f'E1 Fit ({direction})')
+        ax.grid(alpha=0.3)
+        plt.tight_layout()
+        plt.savefig('mobility_fit.png', dpi=200, bbox_inches='tight')
+        plt.close()
+        print(f"  [Plot: mobility_fit.png]")
+
+    # --- 报告 ---
+    with open('mobility_report.txt', 'w') as f:
+        f.write("spinlife.mobility -- Carrier Mobility Report\n")
+        f.write("=" * 45 + "\n")
+        f.write(f"Direction: {direction if direction else '-'}\n")
+        f.write(f"T: {T} K\n")
+        f.write(f"C2D: {C2D_Jm2:.4f} J/m^2\n" if C2D_Jm2 else "")
+        f.write(f"d2E/deps2: {d2E:.4f} eV, R^2: {r2_e:.6f}\n")
+        if A0:
+            f.write(f"A0: {A0:.2f} A^2\n")
+        if E1_vbm:
+            f.write(f"E1_VBM: {E1_vbm:.4f} eV, R^2: {vbm_r2:.6f}\n")
+        if E1_cbm:
+            f.write(f"E1_CBM: {E1_cbm:.4f} eV, R^2: {cbm_r2:.6f}\n")
+        if results:
+            f.write("\n--- Results ---\n")
+            for name, mu, ms, e1 in results:
+                f.write(f"{name}: mu = {mu:.2f} cm^2/V.s\n")
+    print(f"\n  [Report: mobility_report.txt]")
+    print("=" * 65)
+
+
+if __name__ == '__main__':
+    main()

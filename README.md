@@ -1,63 +1,67 @@
-# spinlife — VASP PROCAR Spin Lifetime Calculator
-
-Extract SOC parameters (α, β) and calculate spin lifetime τ_s directly from VASP LSORBIT PROCAR files.
+# spinlife — VASP 自旋寿命 + 载流子迁移率计算
 
 ```
 spinlife/          VASP PROCAR → α, β, τ_s (k·p + DP 机制)
 qe_perturbo/       QE → Phonon → Perturbo workflow (EY + DP 机制)
 ```
 
-## Quick Start
+## 子命令
+
+```bash
+# 自旋寿命: 读 VASP LSORBIT PROCAR → α, β, τ_s
+python -m spinlife.main PROCAR
+
+# 载流子迁移率: 交互式输入应变数据 → C₂D, E₁, μ
+python -m spinlife.main mobility
+```
+
+## 安装
 
 ```bash
 pip install -e .
-python -m spinlife.main path/to/PROCAR
+pip install git+https://github.com/yingjwei/spinlife.git
 ```
 
-## Usage
+## 自旋寿命 (PROCAR)
 
 ```bash
-# 先导出某条带的 raw data，手算校验
-python -m spinlife.main PROCAR --dump-band 44
-
-# 交互式选择 SOC 带对（默认同时跑 VBM 和 CBM）
+# 基本用法 (交互式选 SOC 带对)
 python -m spinlife.main PROCAR
 
-# 命令行指定 SOC 带对（跳过交互）
+# 导出 band 44 原始数据, 用于手算验证
+python -m spinlife.main PROCAR --dump-band 44
+
+# 命令行指定 SOC 带对
 python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 45 46
 
-# 只跑 VBM 或 CBM
-python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 0 0
-
 # 指定参数
-python -m spinlife.main PROCAR --vbm 44 --tau-p 0.1 --k-range 0.05 --T 300
+python -m spinlife.main PROCAR --vbm 44 --tau-p 0.1 --k-range 0.05
 ```
 
-## Options
+### 输出
 
-| Flag | Description |
-|------|-------------|
-| `--vbm N` | VBM band index (default: auto-detect) |
-| `--cbm N` | CBM band index (default: auto-detect) |
-| `--soc-vbm U L` | VBM SOC pair: upper & lower bands |
-| `--soc-cbm U L` | CBM SOC pair: upper & lower bands |
-| `--dump-band N` | Export band N raw data (k, E, sx, sy, sz) |
-| `--tau-p N` | Momentum scattering time τ_p (ps), default 0.1 |
-| `--k-range N` | Fitting range (Å⁻¹), default 0.05 |
-| `--T N` | Temperature (K), default 300 |
-| `--output-dir DIR` | Output directory, default `.` |
+- `spinlife_report.txt` — m*, α, β, τ_s, L_PSH
+- `spinlife_results.png` — SOC 能带 + ΔE² 拟合图 (VBM/CBM 双列)
+- `band_N_data.txt` — `--dump-band N` 导出的能带原始数据
 
-## Output
+## 载流子迁移率
 
-- Terminal report: m*, √(α²+β²), α, β, τ_s, L_PSH (VBM + CBM)
-- `band_N_data.txt` — raw data from `--dump-band N`
-- `spinlife_report.txt` — full text report
-- `spinlife_results.png` — fitting figure (dual column for VBM & CBM)
+```bash
+python -m spinlife.main mobility
+```
 
-## Method
+交互式输入应变-能量数据 → 自动拟合 C₂D 和 E₁ → 输出 μ。
 
-k·p model → ΔE² vs k² fit → √(α²+β²) → spin texture slope → α/β ratio → DP spin lifetime
+### 输出
+
+- `mobility_report.txt` — C₂D, E₁, μ 报告
+- `mobility_fit.png` — C₂D 二次拟合 + E₁ 线性拟合图
+
+## 方法
+
+- 自旋寿命: k·p 模型 → ΔE² vs k² 拟合 → √(α²+β²) → 自旋织构斜率 → α/β → DP τ_s
+- 迁移率: 2D 形变势理论 μ = 2eℏ³C₂D / (3kBT|m*|²E₁²)
 
 ## QE → Perturbo (W6CCl16)
 
-The `qe_perturbo/` directory contains a DFT → Phonon → Perturbo workflow for W6CCl16, covering both Elliott-Yafet and D'yakonov-Perel mechanisms.
+`qe_perturbo/` 包含 QE → Phonon → Perturbo 工作流, 覆盖 EY + DP 机制.
