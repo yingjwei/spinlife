@@ -49,6 +49,10 @@ from spinlife.mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
                                              m0, e_ch)
 from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice
 
+# 所有输出文件统一放入 spinlife/ 目录 (放在最前, 函数默认参数需用到)
+OUTPUT_DIR = 'spinlife'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 
 def build_k_grid(kpoints):
     kx_vals = sorted(set(kp[0] for kp in kpoints))
@@ -224,10 +228,6 @@ _ctx = {
     'mu': None,              # 迁移率 (cm²/V·s)
     'T': 300,                # 温度 (K)
 }
-
-# 所有输出文件统一放入 spinlife/ 目录
-OUTPUT_DIR = 'spinlife'
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 def _ctx_summary():
