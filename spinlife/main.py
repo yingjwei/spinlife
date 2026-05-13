@@ -47,7 +47,7 @@ from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
 from spinlife.mobility.calc_mobility import (read_POSCAR_A0, fit_C2D, fit_E1,
                                              calc_mu, C2D_Jm2_from_d2E,
                                              m0, e_ch)
-from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice
+from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice, read_labelinfo
 
 # 所有输出文件统一放入 spinlife/ 目录 (放在最前, 函数默认参数需用到)
 OUTPUT_DIR = 'spinlife'
@@ -825,10 +825,14 @@ def main_effmass_wannier():
     k_frac, energies, nk, nbands = read_bands(path)
     print(f"  能带范围: 1 - {nbands},  k 点数: {nk}")
 
+    # 读取高对称点标签
+    labelinfo_path = path + '.labelinfo.dat'
+    labels = read_labelinfo(labelinfo_path) if os.path.exists(labelinfo_path) else []
+
     a = float(input("  -->> 晶格常数 a (Å): ").strip())
     k = k_to_reciprocal(k_frac, a)
 
-    # 显示参考能带
+    # 显示参考能带 (含高对称点)
     mid = nk // 2
     print(f"\n  路径中点能带 (用于参考):")
     print(f"  {'Band':>6}  {'Energy(eV)':>12}")
@@ -837,6 +841,11 @@ def main_effmass_wannier():
     high = min(nbands, nbands // 2 + 7)
     for b in range(low, high):
         print(f"  {b+1:>6}  {energies[mid, b]:>12.4f}")
+    if labels:
+        print(f"\n  高对称点 (k 路径标签):")
+        for kidx, kdist, label in labels:
+            k_A = kdist * 2.0 * np.pi / a  # 转为 Å⁻¹
+            print(f"    {label:>6}  @ k_idx={kidx:>4},  k_dist={kdist:.4f},  k={k_A:.4f} Å⁻¹")
 
     band = int(input(f"\n  -->> 能带序号 (1-{nbands}): ")) - 1
     mode = input("  -->> 极值类型 (VBM/CBM): ").strip().upper()
@@ -888,6 +897,10 @@ def main_alpha_beta():
     if path and os.path.exists(path):
         print("\n  [1/2] √(α²+β²) — Wannier SOC 能带拟合")
         k_frac, energies, nk, nbands = read_bands(path)
+        labelinfo_path = path + '.labelinfo.dat'
+        labels = read_labelinfo(labelinfo_path) if os.path.exists(labelinfo_path) else []
+        if labels:
+            print(f"  高对称点: {' → '.join(lbl for _, _, lbl in labels)}")
         a = float(input("  -->> 晶格常数 a (Å): "))
         k = k_to_reciprocal(k_frac, a)
 

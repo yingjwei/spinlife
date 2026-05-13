@@ -52,3 +52,31 @@ def band_slice(k, energy, k0, k_range):
     """截取 k₀ 附近 ±k_range 范围内的数据."""
     mask = np.abs(k - k0) <= k_range
     return k[mask], energy[mask]
+
+
+def read_labelinfo(filepath):
+    """
+    读 wannier90_band.labelinfo.dat — 高对称点标签.
+
+    Format: k_index  k_distance  label
+
+    Returns
+    -------
+    labels : list of (k_index, k_distance, label_str)
+        k_index is 0-based, k_distance is cumulative fractional k.
+    """
+    labels = []
+    with open(filepath, 'r') as f:
+        for line in f:
+            if line.startswith('#') or line.startswith('#'):
+                continue
+            parts = line.strip().split()
+            if len(parts) >= 3:
+                try:
+                    kidx = int(parts[0]) - 1  # 1-based → 0-based
+                    kdist = float(parts[1])
+                    label = parts[2]
+                    labels.append((kidx, kdist, label))
+                except ValueError:
+                    continue
+    return labels
