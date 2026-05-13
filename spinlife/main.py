@@ -1501,9 +1501,9 @@ def main_genkpoints():
 
     # 5) 网格参数
     k_range = float(input("  -->> 范围 ± (分数坐标) [0.05]: ") or 0.05)
-    nx = int(input("  -->> kx 方向点数 [5]: ") or 5)
-    ny = int(input("  -->> ky 方向点数 [5]: ") or 5)
-    nz = int(input("  -->> kz 方向点数 [1]: ") or 1)
+    nx = int(input("  -->> kx 方向点数: ") or 5)
+    ny = int(input("  -->> ky 方向点数: ") or 5)
+    nz = int(input("  -->> kz 方向点数: ") or 1)
     out = input("  -->> 输出文件名 [KPOINTS]: ").strip() or "KPOINTS"
 
     kpoints = generate_grid(center, k_range, nx, ny, nz)

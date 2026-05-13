@@ -87,9 +87,9 @@ def main():
         ]
 
     k_range = float(input("  Range (±, frac coords) [0.05]: ") or 0.05)
-    nx = int(input("  kx 方向点数 [5]: ") or 5)
-    ny = int(input("  ky 方向点数 [5]: ") or 5)
-    nz = int(input("  kz 方向点数 [1]: ") or 1)
+    nx = int(input("  kx 方向点数: ") or 5)
+    ny = int(input("  ky 方向点数: ") or 5)
+    nz = int(input("  kz 方向点数: ") or 1)
     out = input("  Output filename [KPOINTS]: ").strip() or "KPOINTS"
 
     kpoints = generate_grid(center, k_range, nx, ny, nz)
