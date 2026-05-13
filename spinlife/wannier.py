@@ -75,6 +75,126 @@ def band_slice(k, energy, k0, k_range):
     return k[mask], energy[mask]
 
 
+def load_band_data(filename):
+    """
+    读 wannier90_band.dat, 自动判断格式 (参考 fit_effective_mass.py).
+
+    支持三种格式:
+      1. 空行分隔: 每条带一个数据块, 块间有空行
+      2. # Band-Index 头分隔
+      3. 纯两列堆叠: 所有带 (k, E) 直接拼接
+      4. 多列格式: k  E1  E2 ...
+
+    Returns
+    -------
+    k : (nk,) ndarray — k 坐标 (单位与文件一致, 一般是 Å⁻¹)
+    energies : (nk, nbands) ndarray — 能带能量 (eV)
+    nk : int
+    nbands : int
+    """
+    with open(filename, 'r', encoding='utf-8', errors='replace') as f:
+        raw = f.read()
+    raw = raw.replace('\r\n', '\n').replace('\r', '\n')
+
+    # 1) 空行分隔格式
+    if '\n\n' in raw.strip():
+        result = _parse_blank_separated(raw)
+        if result is not None:
+            k, E_all, nk_per = result
+            return k, E_all, nk_per, E_all.shape[1]
+
+    # 2) # 头分隔格式
+    result = _parse_header_separated(raw)
+    if result is not None:
+        k, E_all, nk_per = result
+        return k, E_all, nk_per, E_all.shape[1]
+
+    # 3/4) 直接 loadtxt
+    arr = np.loadtxt(filename)
+    if arr.ndim == 1:
+        arr = arr.reshape(-1, 1)
+
+    if arr.shape[1] >= 3:
+        # 多列格式: k  E1  E2  ...
+        return arr[:, 0], arr[:, 1:], arr.shape[0], arr.shape[1] - 1
+    elif arr.shape[1] == 2:
+        # 两列: k  E  (单带)
+        return arr[:, 0], arr[:, 1:2], arr.shape[0], 1
+    else:
+        raise ValueError(f"无法解析: {arr.shape[1]} 列 (需要 ≥2 列)")
+
+
+def _parse_blank_separated(raw_text):
+    """解析空行分隔的 wannier90_band.dat 文本"""
+    blocks = [b.strip() for b in raw_text.split('\n\n') if b.strip()]
+    bands_list = []
+    k_first = None
+    for block in blocks:
+        lines = block.split('\n')
+        clean = [line.strip() for line in lines
+                 if line.strip() and not line.strip().startswith('#')]
+        if not clean:
+            continue
+        try:
+            arr = np.loadtxt(clean)
+        except Exception:
+            continue
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        if arr.shape[1] < 2:
+            continue
+        k_this = arr[:, 0]
+        e_this = arr[:, 1]
+        if k_first is None:
+            k_first = k_this
+        elif not np.allclose(k_this, k_first, atol=1e-10):
+            return None
+        bands_list.append(e_this)
+    if len(bands_list) < 1:
+        return None
+    return k_first, np.column_stack(bands_list), len(k_first)
+
+
+def _parse_header_separated(raw_text):
+    """解析 # Band-Index 类头分隔的格式"""
+    lines = raw_text.split('\n')
+    blocks = []
+    cur = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith('#'):
+            if cur:
+                blocks.append('\n'.join(cur))
+                cur = []
+            continue
+        cur.append(s)
+    if cur:
+        blocks.append('\n'.join(cur))
+    bands_list = []
+    k_first = None
+    for block in blocks:
+        try:
+            arr = np.loadtxt(block.split('\n'))
+        except Exception:
+            continue
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        if arr.shape[1] < 2:
+            continue
+        k_this = arr[:, 0]
+        e_this = arr[:, 1]
+        if k_first is None:
+            k_first = k_this
+        elif len(k_this) != len(k_first) or not np.allclose(k_this, k_first, atol=1e-10):
+            continue
+        bands_list.append(e_this)
+    if len(bands_list) < 2:
+        return None
+    return k_first, np.column_stack(bands_list), len(k_first)
+
+
 def read_labelinfo(filepath):
     """
     读 wannier90_band.labelinfo.dat — 高对称点标签.

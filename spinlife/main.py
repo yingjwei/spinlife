@@ -48,7 +48,7 @@ from spinlife.mobility.calc_mobility import (read_POSCAR_A0, read_POSCAR_a,
                                              fit_C2D, fit_E1,
                                              calc_mu, C2D_Jm2_from_d2E,
                                              m0, e_ch)
-from spinlife.wannier import read_bands, k_to_reciprocal, find_extremum, band_slice, read_labelinfo
+from spinlife.wannier import load_band_data, read_bands, k_to_reciprocal, find_extremum, band_slice, read_labelinfo
 
 # 所有输出文件统一放入 spinlife/ 目录 (放在最前, 函数默认参数需用到)
 OUTPUT_DIR = 'spinlife'
@@ -809,52 +809,36 @@ def main_mobility():
 
 
 def main_effmass_wannier():
-    """有效质量: 读 Wannier 能带 → 抛物线拟合 → m*"""
+    """有效质量: 读 Wannier 能带 → 抛物线拟合 → m* (参考 fit_effective_mass.py)"""
     print()
     print("=" * 65)
     print("  有效质量 (Effective mass from Wannier bands)")
     print("=" * 65)
 
     path = _prompt_path("Wannier 能带文件路径", default_names=['wannier90_band.dat'])
-    if not path:
-        print("  [空输入]")
-        return
-    if not os.path.exists(path):
-        print(f"  [文件不存在: {path}]")
+    if not path or not os.path.exists(path):
+        print(f"  [文件不存在]")
         return
 
-    k_frac, energies, nk, nbands = read_bands(path)
+    # 使用参考代码的解析方式 (自动检测格式)
+    k, energies, nk, nbands = load_band_data(path)
     print(f"  能带范围: 1 - {nbands},  k 点数: {nk}")
-    if nbands == 0:
-        print("  [错误: 未解析到能带, 文件格式可能不正确]")
-        return
 
-    # 从 POSCAR 自动读取晶格常数
-    a = None
-    for poscar_name in ['POSCAR', 'CONTCAR']:
-        if os.path.exists(poscar_name):
-            a = read_POSCAR_a(poscar_name)
-            if a:
-                print(f"  晶格常数 a = {a:.4f} Å  (来自 {poscar_name})")
-                break
-    if not a:
-        a = float(input("  -->> 晶格常数 a (Å): ").strip())
-    k = k_to_reciprocal(k_frac, a)
+    # 读取高对称点标签
+    labelinfo_path = path + '.labelinfo.dat'
+    labels = read_labelinfo(labelinfo_path) if os.path.exists(labelinfo_path) else []
+    if labels:
+        print(f"  k 路径: {' → '.join(lbl for _, _, lbl in labels)}")
 
-    # 显示参考能带 (含高对称点)
+    # 显示参考能带
     mid = nk // 2
-    print(f"\n  路径中点能带 (用于参考):")
+    print(f"\n  参考能带 (路径中点):")
     print(f"  {'Band':>6}  {'Energy(eV)':>12}")
     print(f"  {'-'*22}")
     low = max(0, nbands // 2 - 6)
     high = min(nbands, nbands // 2 + 7)
     for b in range(low, high):
         print(f"  {b+1:>6}  {energies[mid, b]:>12.4f}")
-    if labels:
-        print(f"\n  高对称点 (k 路径标签):")
-        for kidx, kdist, label in labels:
-            k_A = kdist * 2.0 * np.pi / a  # 转为 Å⁻¹
-            print(f"    {label:>6}  @ k_idx={kidx:>4},  k_dist={kdist:.4f},  k={k_A:.4f} Å⁻¹")
 
     band = int(input(f"\n  -->> 能带序号 (1-{nbands}): ")) - 1
     mode = input("  -->> 极值类型 (VBM/CBM): ").strip().upper()
@@ -862,53 +846,91 @@ def main_effmass_wannier():
 
     energy = energies[:, band]
     k0, idx0 = find_extremum(k, energy, mode)
-    print(f"  极值: k₀ = {k0:.4f} Å⁻¹,  E₀ = {energy[idx0]:.4f} eV")
+    print(f"  极值: k₀ = {k0:.4f},  E₀ = {energy[idx0]:.4f} eV")
 
-    try:
-        kr = float(input("  -->> 拟合范围 ±Δk (Å⁻¹) [0.05]: ") or 0.05)
-    except (EOFError, KeyboardInterrupt):
-        kr = 0.05
+    # 多范围拟合 (参考: 0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15)
+    fit_ranges = [0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.15]
+    print(f"\n  {'拟合范围':>8}  {'m*/m₀':>8}  {'R²':>8}  {'点数'}")
+    print(f"  {'-'*35}")
 
-    k_slice, e_slice = band_slice(k, energy - energy[idx0], k0, kr)
-    if len(k_slice) < 3:
-        print(f"  [范围仅有 {len(k_slice)} 个 k 点, 无法拟合]")
+    best_m, best_r2, best_kr = None, 0, None
+    for kr in fit_ranges:
+        m_star, r2, n_pts = fit_effmass(k, energy, k0, kr)
+        if m_star is None:
+            continue
+        flag = "  ← 最优" if (r2 > 0.97 and m_star < 999 and r2 > best_r2) else ""
+        if flag:
+            best_m, best_r2, best_kr = m_star, r2, kr
+        print(f"  k≤{kr:<.3f}   {m_star:>8.1f}  {r2:>7.3f}  {n_pts:3d}{flag}")
+
+    if best_m is None:
+        print("\n  [所有拟合 R² 均偏低, 带边可能非抛物线]")
         return
 
-    m_star, r2, n_pts = fit_effmass(k_slice, e_slice, k0, kr)
-    if m_star:
-        print(f"\n  m* = {m_star:.4f} m₀  (R² = {r2:.6f},  {n_pts} pts)")
-        _ctx['m_star'] = m_star
+    print(f"\n  → 推荐: m* = {best_m:.1f} m₀  (范围 ±{best_kr}, R² = {best_r2:.4f})")
+    _ctx['m_star'] = best_m
 
-        # 绘图: E vs (k-k₀)² + 线性拟合
-        if _HAS_MPL:
-            fig, ax = plt.subplots(figsize=(6, 4))
-            dk2 = (k_slice - k0) ** 2
-            A = 3.81 / m_star  # 从 m* 反推斜率
-            fit_x = np.linspace(0, max(dk2) * 1.05, 100)
-            fit_y = A * fit_x
-            ax.plot(dk2, e_slice * 1000, 'o', ms=6, color='#E24A33',
-                    label=f'Band {band+1} (data)')
-            ax.plot(fit_x, fit_y * 1000, '-', color='#348ABD',
-                    label=f'Fit  m*/m₀ = {m_star:.4f}  (R²={r2:.4f})')
-            ax.set_xlabel(r'$(k - k_0)^2$  (Å$^{-2}$)')
-            ax.set_ylabel(r'$E - E_0$  (meV)')
-            ax.legend(fontsize=9)
-            ax.set_title(f'Effective Mass — Band {band+1}')
-            ax.grid(alpha=0.3)
-            plt.tight_layout()
-            plt.savefig(os.path.join(OUTPUT_DIR, 'effmass_fit.png'), dpi=200, bbox_inches='tight')
-            plt.close()
-            print(f"  [Plot -> {OUTPUT_DIR}/effmass_fit.png]")
+    # 保存报告
+    with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'w') as f:
+        f.write("Effective Mass Report (Wannier)\n")
+        f.write(f"File: {path}\n")
+        f.write(f"Band: {band+1}\n")
+        f.write(f"m* = {best_m:.4f} m₀\n")
+        f.write(f"R² = {best_r2:.6f}\n")
+        f.write(f"Fit range: ±{best_kr}\n")
+    print(f"  [报告 -> {OUTPUT_DIR}/effmass_report.txt]")
 
-        with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'w') as f:
-            f.write("Effective Mass Report (Wannier)\n")
-            f.write(f"File: {path}\n")
-            f.write(f"Band: {band+1}\n")
-            f.write(f"m* = {m_star:.4f} m₀\n")
-            f.write(f"R² = {r2:.6f}\n")
-        print(f"  [报告 -> {OUTPUT_DIR}/effmass_report.txt]")
-    else:
-        print("  [拟合失败]")
+    # 绘图 (仿参考代码风格)
+    if _HAS_MPL:
+        plt.rcParams['font.family'] = 'serif'
+        plt.rcParams['font.serif'] = ['Times New Roman']
+        plt.rcParams['axes.linewidth'] = 1.2
+
+        fig, ax = plt.subplots(figsize=(7, 5))
+        # 数据点
+        ax.plot(k, energy, 'o', ms=5, color='#E24A33', label=f'Band {band+1}')
+        # 极值点
+        marker = 'v' if mode == 'max' else '^'
+        ax.plot(k0, energy[idx0], marker, ms=10, color='#0000ff', zorder=5)
+        # 拟合抛物线
+        mask = np.abs(k - k0) <= best_kr
+        if np.sum(mask) > 0:
+            k_fit = k[mask] - k0
+            E_fit = energy[mask]
+            coeffs = np.polyfit(k_fit**2, E_fit, 1)
+            A, E0_fit = coeffs[0], coeffs[1]
+            ks = np.linspace(-best_kr, best_kr, 200)
+            Es = A * ks**2 + E0_fit
+            ax.plot(ks + k0, Es, '-', lw=2.5, color='#0000ff', label='Parabolic fit')
+            ax.axvspan(k0 - best_kr, k0 + best_kr, alpha=0.06, color='#0000ff')
+        # 高对称点标注
+        if labels:
+            sym_ks = []
+            sym_lbls = []
+            for kidx, kdist, lbl in labels:
+                if kidx < len(k):
+                    sym_ks.append(k[kidx])
+                    sym_lbls.append(lbl.replace('GAMMA', 'Γ'))
+            if sym_ks:
+                ymin, ymax = ax.get_ylim()
+                ax.set_xticks(sym_ks)
+                for sk, sl in zip(sym_ks, sym_lbls):
+                    ax.axvline(sk, color='black', ls='--', lw=0.8, alpha=0.5)
+                    ax.text(sk, ymin - 0.06 * (ymax - ymin), sl,
+                            ha='center', va='top', fontsize=14, color='black')
+                ax.tick_params(axis='x', length=6)
+        # 标注框
+        txt = f'$m^*$ = {best_m:.1f} $m_0$\n$R^2$ = {best_r2:.3f}'
+        ax.text(0.97, 0.95, txt, transform=ax.transAxes, va='top', ha='right',
+                fontsize=13, bbox=dict(boxstyle='round,pad=0.5', facecolor='white',
+                                       edgecolor='black', linewidth=1.2))
+        ax.tick_params(axis='y', labelsize=13)
+        ax.set_ylabel('E (eV)', fontsize=15)
+        ax.legend(fontsize=12, frameon=True, edgecolor='black')
+        fig.tight_layout()
+        fig.savefig(os.path.join(OUTPUT_DIR, 'effmass_fit.png'), dpi=200)
+        plt.close(fig)
+        print(f"  [Plot -> {OUTPUT_DIR}/effmass_fit.png]")
 
 
 def main_alpha_beta():
@@ -927,7 +949,7 @@ def main_alpha_beta():
     path = _prompt_path("Wannier 能带文件路径", default_names=['wannier90_band.dat'], allow_skip=True)
     if path and os.path.exists(path):
         print("\n  [1/2] √(α²+β²) — Wannier SOC 能带拟合")
-        k_frac, energies, nk, nbands = read_bands(path)
+        k, energies, nk, nbands = load_band_data(path)
         if nbands == 0:
             print("  [错误: 未解析到能带, 文件格式可能不正确]")
             return
@@ -944,7 +966,7 @@ def main_alpha_beta():
                     break
         if not a:
             a = float(input("  -->> 晶格常数 a (Å): "))
-        k = k_to_reciprocal(k_frac, a)
+        k = k_to_reciprocal(k, a)
 
         up = int(input(f"  -->> SOC 带对上能带 (1-{nbands}): ")) - 1
         lo = int(input(f"  -->> SOC 带对下能带 (1-{nbands}): ")) - 1
@@ -1276,10 +1298,18 @@ def main_dump_band_menu():
         if not path or not os.path.exists(path):
             print(f"  [文件不存在: {path}]")
             return
-        k_frac, energies, nk, nbands = read_bands(path)
+        k, energies, nk, nbands = load_band_data(path)
         band = int(input(f"  能带序号 (1-{nbands}): ")) - 1
-        a = float(input("  -->> 晶格常数 a (Å): ") or "1")
-        k = k_to_reciprocal(k_frac, a)
+        a = None
+        for poscar_name in ['POSCAR', 'CONTCAR']:
+            if os.path.exists(poscar_name):
+                a = read_POSCAR_a(poscar_name)
+                if a:
+                    print(f"  晶格常数 a = {a:.4f} Å  (来自 {poscar_name})")
+                    break
+        if not a:
+            a = float(input("  -->> 晶格常数 a (Å): ") or "1")
+        k = k_to_reciprocal(k, a)
 
         out = os.path.join(OUTPUT_DIR, f"wannier_band_{band+1}_data.txt")
         with open(out, 'w') as f:
