@@ -59,6 +59,51 @@ def _clean_input(text):
     return ''.join(c for c in text if c >= ' ' or c == '\t').strip()
 
 
+def _prompt_path(prompt, default_names=None, allow_skip=False):
+    """
+    智能文件路径输入: 自动检测当前目录下的常见文件名, 用户可回车确认.
+
+    Parameters
+    ----------
+    prompt : str
+    default_names : list[str] | None — 自动检测的文件名列表
+    allow_skip : bool — 是否允许跳过 (返回 None)
+
+    Returns
+    -------
+    str | None — 文件路径, 或 None 表示跳过
+    """
+    # 检测默认文件
+    hint = ""
+    auto = None
+    if default_names:
+        for name in default_names:
+            if os.path.exists(name):
+                auto = name
+                hint = f" [检测到: {name}]"
+                break
+
+    if auto and allow_skip:
+        full = f"{prompt}{hint} (Enter 确认, 留空跳过): "
+    elif auto:
+        full = f"{prompt}{hint} (Enter 确认): "
+    elif allow_skip:
+        full = f"{prompt} (留空跳过): "
+    else:
+        full = f"{prompt}: "
+
+    raw = input(f"\n  -->> {full}")
+    text = _clean_input(raw)
+
+    if not text and auto:
+        return auto
+    if not text and allow_skip:
+        return None
+    if text:
+        return text
+    return auto  # allow_skip=False 且无输入但有默认
+
+
 def build_k_grid(kpoints):
     kx_vals = sorted(set(kp[0] for kp in kpoints))
     ky_vals = sorted(set(kp[1] for kp in kpoints))
@@ -574,7 +619,7 @@ def main_mobility():
 
         A0 = None
         try:
-            poscar = _clean_input(input("  -->> POSCAR 路径 (留空手动输入 A0): "))
+            poscar = _prompt_path("POSCAR 路径", default_names=['POSCAR'], allow_skip=True)
             if poscar:
                 A0 = read_POSCAR_A0(poscar)
             if A0 is None:
@@ -769,7 +814,7 @@ def main_effmass_wannier():
     print("  有效质量 (Effective mass from Wannier bands)")
     print("=" * 65)
 
-    path = _clean_input(input("  -->> Wannier 能带文件路径 (wannier90_band.dat): "))
+    path = _prompt_path("Wannier 能带文件路径", default_names=['wannier90_band.dat'])
     if not path:
         print("  [空输入]")
         return
@@ -839,7 +884,7 @@ def main_alpha_beta():
 
     # ---- Part 1: √(α²+β²) from Wannier ----
     sqrt_ab = None
-    path = _clean_input(input("  -->> Wannier 能带文件路径 (留空跳过): "))
+    path = _prompt_path("Wannier 能带文件路径", default_names=['wannier90_band.dat'], allow_skip=True)
     if path and os.path.exists(path):
         print("\n  [1/2] √(α²+β²) — Wannier SOC 能带拟合")
         k_frac, energies, nk, nbands = read_bands(path)
@@ -869,7 +914,7 @@ def main_alpha_beta():
 
     # ---- Part 2: α/β ratio from PROCAR (斜率拟合, 非点对点平均) ----
     ratio = None
-    procar_path = _clean_input(input("\n  -->> PROCAR 路径 (留空跳过): "))
+    procar_path = _prompt_path("PROCAR 路径", default_names=['PROCAR'], allow_skip=True)
     if procar_path and os.path.exists(procar_path):
         print("\n  [2/2] α/β 比值 — PROCAR 自旋织构斜率拟合")
         print("  方法: ⟨σ_x⟩ = A·k,  ⟨σ_y⟩ = B·k  →  α/β = A/B")
@@ -1104,7 +1149,7 @@ def main_dump_band_menu():
     c = input("  -->> ").strip()
 
     if c == '1':
-        path = _clean_input(input("  -->> PROCAR 路径: "))
+        path = _prompt_path("PROCAR 路径", default_names=['PROCAR'])
         if not path or not os.path.exists(path):
             print(f"  [文件不存在: {path}]")
             return
@@ -1113,7 +1158,7 @@ def main_dump_band_menu():
         dump_band_data(procar, band)
 
     elif c == '2':
-        path = _clean_input(input("  -->> Wannier 能带文件路径: "))
+        path = _prompt_path("Wannier 能带文件路径", default_names=['wannier90_band.dat'])
         if not path or not os.path.exists(path):
             print(f"  [文件不存在: {path}]")
             return
