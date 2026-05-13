@@ -1477,16 +1477,21 @@ def main_genkpoints():
     for b in range(low, high):
         print(f"  {b+1:>6}  {energies[mid, b]:>12.4f}")
 
-    # 3) 选 SOC 带对 → 自动找 k₀ (劈裂最小处)
+    # 3) 选 SOC 带对 → 找带边极值 (VBM 取上带 max, CBM 取下带 min)
     up = int(input(f"\n  -->> SOC 上能带 (1-{nbands}): ")) - 1
     lo = int(input(f"  -->> SOC 下能带 (1-{nbands}): ")) - 1
     E_up = energies[:, up]
     E_lo = energies[:, lo]
-    dE = np.abs(E_up - E_lo)
-    k0_idx = np.argmin(dE)
-    k0 = k[k0_idx]
 
-    print(f"\n  SOC 劈裂最小处: k₀ = ({k0:.6f}, 0, 0),  ΔE_min = {dE[k0_idx]*1000:.2f} meV")
+    mode = input("  -->> 极值类型 (VBM=上带求最大, CBM=下带求最小): ").strip().upper()
+    if mode.startswith('C'):
+        k0_idx = np.argmin(E_lo)
+        k0 = k[k0_idx]
+        print(f"\n  CBM (Band {lo+1} 最小): k₀ = {k0:.6f},  E = {E_lo[k0_idx]:.4f} eV")
+    else:
+        k0_idx = np.argmax(E_up)
+        k0 = k[k0_idx]
+        print(f"\n  VBM (Band {up+1} 最大): k₀ = {k0:.6f},  E = {E_up[k0_idx]:.4f} eV")
 
     # 4) 确认中心点
     cx = float(input(f"\n  -->> KPOINTS 中心 kx [{k0:.6f}]: ") or k0)
