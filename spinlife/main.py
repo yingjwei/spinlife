@@ -1,20 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-spinlife — VASP PROCAR 自旋寿命 + 载流子迁移率计算
+spinlife — VASP 自旋寿命 + 载流子迁移率计算
+
+安装后:
+  spinlife                   交互式菜单 (默认)
+  spinlife PROCAR [options]  PROCAR 传统模式
+  spinlife mobility          迁移率模式
 
 子命令:
-  python -m spinlife.main PROCAR [options]        自旋寿命 (PROCAR -> alpha/beta/tau_s)
-  python -m spinlife.main mobility [options]       载流子迁移率 (形变势理论)
-  python -m spinlife.main PROCAR --dump-band N    导出能带原始数据 (用于校验)
+  python -m spinlife.main                   交互式菜单
+  python -m spinlife.main PROCAR [options]  自旋寿命 (PROCAR -> alpha/beta/tau_s)
+  python -m spinlife.main mobility          载流子迁移率 (形变势理论)
 
 自旋寿命用法:
-  python -m spinlife.main PROCAR [--vbm N] [--cbm N] [--tau-p 0.1]
-         [--k-range 0.05] [--T 300] [--output-dir .]
+  spinlife PROCAR [--vbm N] [--cbm N] [--tau-p 0.1]
+         [--k-range 0.05] [--T 300] [--output-dir spinlife]
          [--soc-vbm UPPER LOWER] [--soc-cbm UPPER LOWER]
          [--dump-band N]
 
 迁移率用法:
-  python -m spinlife.main mobility
+  spinlife mobility
+
+输出文件统一保存在 spinlife/ 目录.
 """
 
 import sys
@@ -50,7 +57,7 @@ def build_k_grid(kpoints):
     return kx_vals, ky_vals, nkx, nky
 
 
-def dump_band_data(procar, band_idx, output_dir='.'):
+def dump_band_data(procar, band_idx, output_dir=OUTPUT_DIR):
     """输出指定能带沿 k 切片的原始数据 (k, E, sx, sy, sz)"""
     kpts = procar.get_kpoints_cart()
     idx_slice, k_scan, order = get_k_slice(kpts, procar)
@@ -218,6 +225,10 @@ _ctx = {
     'T': 300,                # 温度 (K)
 }
 
+# 所有输出文件统一放入 spinlife/ 目录
+OUTPUT_DIR = 'spinlife'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 
 def _ctx_summary():
     """当前工作区状态摘要"""
@@ -325,7 +336,7 @@ def _procar_cli_flow():
     tau_p = 0.1
     k_range = 0.05
     T = 300
-    output_dir = '.'
+    output_dir = OUTPUT_DIR
     dump_band = None
 
     i = 2
@@ -715,12 +726,12 @@ def main_mobility():
         ax.set_title('E1 Fit')
         ax.grid(alpha=0.3)
         plt.tight_layout()
-        plt.savefig('mobility_fit.png', dpi=200, bbox_inches='tight')
+        plt.savefig(os.path.join(OUTPUT_DIR, 'mobility_fit.png'), dpi=200, bbox_inches='tight')
         plt.close()
-        print(f"\n  [Plot: mobility_fit.png]")
+        print(f"\n  [Plot: {OUTPUT_DIR}/mobility_fit.png]")
 
     # --- 报告 ---
-    with open('mobility_report.txt', 'w') as f:
+    with open(os.path.join(OUTPUT_DIR, 'mobility_report.txt'), 'w') as f:
         f.write("spinlife.mobility -- Carrier Mobility Report\n")
         f.write("=" * 45 + "\n")
         f.write(f"T: {T} K\n\n")
@@ -742,7 +753,7 @@ def main_mobility():
             if dat.get('mu_e'):
                 f.write(f"mu_e: {dat['mu_e']:.2f} cm^2/V.s, tau_p: {dat['tau_e']:.4f} ps\n")
             f.write("\n")
-    print(f"\n  [Report: mobility_report.txt]")
+    print(f"\n  [Report: {OUTPUT_DIR}/mobility_report.txt]")
     print("=" * 65)
 
 
@@ -796,13 +807,13 @@ def main_effmass_wannier():
     if m_star:
         print(f"\n  m* = {m_star:.4f} m₀  (R² = {r2:.6f},  {n_pts} pts)")
         _ctx['m_star'] = m_star
-        with open('effmass_report.txt', 'w') as f:
+        with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'w') as f:
             f.write("Effective Mass Report (Wannier)\n")
             f.write(f"File: {path}\n")
             f.write(f"Band: {band+1}\n")
             f.write(f"m* = {m_star:.4f} m₀\n")
             f.write(f"R² = {r2:.6f}\n")
-        print(f"  [报告 -> effmass_report.txt]")
+        print(f"  [报告 -> {OUTPUT_DIR}/effmass_report.txt]")
     else:
         print("  [拟合失败]")
 
@@ -933,13 +944,13 @@ def main_alpha_beta():
         print(f"  α/β     = {ratio:.4f}")
         print(f"  α       = {_ctx['alpha_meva']:.2f} meV·Å")
         print(f"  β       = {_ctx['beta_meva']:.2f} meV·Å")
-        with open('soc_report.txt', 'w') as f:
+        with open(os.path.join(OUTPUT_DIR, 'soc_report.txt'), 'w') as f:
             f.write("SOC Parameter Report\n")
             f.write(f"sqrt(a^2+b^2) = {sqrt_ab*1000:.2f} meV.A\n")
             f.write(f"alpha/beta    = {ratio:.4f}\n")
             f.write(f"alpha         = {alpha*1000:.2f} meV.A\n")
             f.write(f"beta          = {beta*1000:.2f} meV.A\n")
-        print(f"  [报告 -> soc_report.txt]")
+        print(f"  [报告 -> {OUTPUT_DIR}/soc_report.txt]")
     elif sqrt_ab and not ratio:
         print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
         print("  (缺少 α/β 比值, 需运行 PROCAR 部分)")
@@ -1059,7 +1070,7 @@ def main_spin_lifetime_menu():
         print(f"\n  α_eff = {result['alpha_eff_meva']:.2f} meV·Å")
         print(f"  τ_s   = {result['tau_s_ps']:.2f} ps")
         print(f"  L_PSH = {result['L_PSH_um']:.2f} μm")
-        with open('spinlife_report.txt', 'w') as f:
+        with open(os.path.join(OUTPUT_DIR, 'spinlife_report.txt'), 'w') as f:
             f.write("Spin Lifetime Report\n")
             f.write(f"m*     = {m_star:.4f} m0\n")
             f.write(f"alpha  = {alpha:.2f} meV.A\n")
@@ -1068,7 +1079,7 @@ def main_spin_lifetime_menu():
             f.write(f"T      = {T} K\n")
             f.write(f"tau_s  = {result['tau_s_ps']:.2f} ps\n")
             f.write(f"L_PSH  = {result['L_PSH_um']:.2f} um\n")
-        print(f"  [报告 -> spinlife_report.txt]")
+        print(f"  [报告 -> {OUTPUT_DIR}/spinlife_report.txt]")
 
 
 def main_dump_band_menu():
@@ -1103,7 +1114,7 @@ def main_dump_band_menu():
         a = float(input("  -->> 晶格常数 a (Å): ") or "1")
         k = k_to_reciprocal(k_frac, a)
 
-        out = f"wannier_band_{band+1}_data.txt"
+        out = os.path.join(OUTPUT_DIR, f"wannier_band_{band+1}_data.txt")
         with open(out, 'w') as f:
             f.write("# k(A^-1)  E(eV)\n")
             for i in range(nk):

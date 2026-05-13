@@ -8,8 +8,14 @@ qe_perturbo/       QE → Phonon → Perturbo workflow (EY + DP 机制)
 ## 交互式菜单 (默认入口, 推荐)
 
 ```bash
+# 安装后直接启动
+spinlife
+
+# 或
 python -m spinlife.main
 ```
+
+所有输出文件 (报告/图片/数据) 统一保存在当前目录下的 `spinlife/` 文件夹中。
 
 **会话上下文设计:** 各模块计算结果在内存中自动传递, 菜单顶部实时显示当前已计算的值.
 进入自旋寿命选项时, 所有已知结果自动预填, 无需手工重复输入.
@@ -93,13 +99,13 @@ python -m spinlife.main PROCAR --dump-band 44
 
 | 文件 | 模块 | 内容 |
 |------|------|------|
-| `mobility_report.txt` | Mobility | C₂D, E₁, μ, τ_p |
-| `mobility_fit.png` | Mobility | C₂D + E₁ 拟合图 |
-| `effmass_report.txt` | 有效质量 | m* |
-| `soc_report.txt` | α/β | √(α²+β²), α, β |
-| `spinlife_report.txt` | 自旋寿命 | τ_s, L_PSH |
-| `spinlife_results.png` | PROCAR | SOC 能带 + ΔE² 图 |
-| `band_N_data.txt` | PROCAR --dump-band | k, E, ⟨σ⟩ |
+| `spinlife/mobility_report.txt` | Mobility | C₂D, E₁, μ, τ_p |
+| `spinlife/mobility_fit.png` | Mobility | C₂D + E₁ 拟合图 |
+| `spinlife/effmass_report.txt` | 有效质量 | m* |
+| `spinlife/soc_report.txt` | α/β | √(α²+β²), α, β |
+| `spinlife/spinlife_report.txt` | 自旋寿命 | τ_s, L_PSH |
+| `spinlife/spinlife_results.png` | PROCAR | SOC 能带 + ΔE² 图 |
+| `spinlife/band_N_data.txt` | PROCAR --dump-band | k, E, ⟨σ⟩ |
 
 ## QE → Perturbo (W6CCl16)
 

@@ -12,4 +12,9 @@ setup(
     extras_require={
         'plot': ['matplotlib>=3.0'],
     },
+    entry_points={
+        'console_scripts': [
+            'spinlife = spinlife.main:main',
+        ],
+    },
 )
