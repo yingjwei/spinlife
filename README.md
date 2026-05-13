@@ -101,8 +101,11 @@ python -m spinlife.main PROCAR --dump-band 44
 |------|------|------|
 | `spinlife/mobility_report.txt` | Mobility | C₂D, E₁, μ, τ_p |
 | `spinlife/mobility_fit.png` | Mobility | C₂D + E₁ 拟合图 |
-| `spinlife/effmass_report.txt` | 有效质量 | m* |
-| `spinlife/soc_report.txt` | α/β | √(α²+β²), α, β |
+| `spinlife/effmass_report.txt` | 有效质量 | m*, R² |
+| `spinlife/effmass_fit.png` | 有效质量 | 抛物线拟合图 |
+| `spinlife/soc_report.txt` | α/β | √(α²+β²), α, β, R² |
+| `spinlife/soc_wannier_fit.png` | Wannier SOC | SOC 能带 + ΔE² 拟合图 |
+| `spinlife/soc_spin_fit.png` | PROCAR 自旋 | ⟨σ⟩ vs k 拟合图 |
 | `spinlife/spinlife_report.txt` | 自旋寿命 | τ_s, L_PSH |
 | `spinlife/spinlife_results.png` | PROCAR | SOC 能带 + ΔE² 图 |
 | `spinlife/band_N_data.txt` | PROCAR --dump-band | k, E, ⟨σ⟩ |

@@ -223,8 +223,11 @@ python /path/to/spinlife/main.py
 <tr><td><code>PROCAR</code></td><td>输入</td><td>VASP LSORBIT 自旋投影数据</td></tr>
 <tr><td><code>spinlife/mobility_report.txt</code></td><td>输出</td><td>C₂D, E₁, μ, τ_p (x/y 双方向)</td></tr>
 <tr><td><code>spinlife/mobility_fit.png</code></td><td>输出</td><td>C₂D + E₁ 拟合对比图</td></tr>
-<tr><td><code>spinlife/effmass_report.txt</code></td><td>输出</td><td>有效质量 m*</td></tr>
-<tr><td><code>spinlife/soc_report.txt</code></td><td>输出</td><td>√(α²+β²), α, β</td></tr>
+<tr><td><code>spinlife/effmass_report.txt</code></td><td>输出</td><td>有效质量 m*, R²</td></tr>
+<tr><td><code>spinlife/effmass_fit.png</code></td><td>输出</td><td>有效质量抛物线拟合图</td></tr>
+<tr><td><code>spinlife/soc_report.txt</code></td><td>输出</td><td>√(α²+β²), α, β, R²</td></tr>
+<tr><td><code>spinlife/soc_wannier_fit.png</code></td><td>输出</td><td>Wannier SOC 能带 + ΔE² 拟合图</td></tr>
+<tr><td><code>spinlife/soc_spin_fit.png</code></td><td>输出</td><td>PROCAR 自旋织构 ⟨σ⟩ vs k 拟合图</td></tr>
 <tr><td><code>spinlife/spinlife_report.txt</code></td><td>输出</td><td>τ<sub>s</sub>, L<sub>PSH</sub></td></tr>
 <tr><td><code>spinlife/spinlife_results.png</code></td><td>输出</td><td>SOC 能带 + ΔE² 拟合图</td></tr>
 <tr><td colspan="3"><div class="note">所有输出文件统一保存在当前目录下的 <code>spinlife/</code> 文件夹中。</div></td></tr>

@@ -869,6 +869,28 @@ def main_effmass_wannier():
     if m_star:
         print(f"\n  m* = {m_star:.4f} m₀  (R² = {r2:.6f},  {n_pts} pts)")
         _ctx['m_star'] = m_star
+
+        # 绘图: E vs (k-k₀)² + 线性拟合
+        if _HAS_MPL:
+            fig, ax = plt.subplots(figsize=(6, 4))
+            dk2 = (k_slice - k0) ** 2
+            A = 3.81 / m_star  # 从 m* 反推斜率
+            fit_x = np.linspace(0, max(dk2) * 1.05, 100)
+            fit_y = A * fit_x
+            ax.plot(dk2, e_slice * 1000, 'o', ms=6, color='#E24A33',
+                    label=f'Band {band+1} (data)')
+            ax.plot(fit_x, fit_y * 1000, '-', color='#348ABD',
+                    label=f'Fit  m*/m₀ = {m_star:.4f}  (R²={r2:.4f})')
+            ax.set_xlabel(r'$(k - k_0)^2$  (Å$^{-2}$)')
+            ax.set_ylabel(r'$E - E_0$  (meV)')
+            ax.legend(fontsize=9)
+            ax.set_title(f'Effective Mass — Band {band+1}')
+            ax.grid(alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(OUTPUT_DIR, 'effmass_fit.png'), dpi=200, bbox_inches='tight')
+            plt.close()
+            print(f"  [Plot -> {OUTPUT_DIR}/effmass_fit.png]")
+
         with open(os.path.join(OUTPUT_DIR, 'effmass_report.txt'), 'w') as f:
             f.write("Effective Mass Report (Wannier)\n")
             f.write(f"File: {path}\n")
@@ -922,6 +944,36 @@ def main_alpha_beta():
             sqrt_ab = ab_norm
             print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
             print(f"  Δ       = {Delta*1000:.2f} meV  (R² = {r2:.4f})")
+
+            # 绘图: ΔE² vs k² + 拟合 + SOC 能带
+            if _HAS_MPL:
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+                # 左: SOC 能带
+                mid = nk // 2
+                ax1.plot(k, E_up * 1000, 'o-', ms=2, lw=1, label=f'Band {up+1}')
+                ax1.plot(k, E_lo * 1000, 's-', ms=2, lw=1, label=f'Band {lo+1}')
+                ax1.axvspan(k0 - kr, k0 + kr, alpha=0.12, color='blue', label='fit range')
+                ax1.axvline(k0, color='gray', ls='--', alpha=0.4)
+                ax1.set_xlabel('k (Å⁻¹)'); ax1.set_ylabel('E (meV)')
+                ax1.legend(fontsize=8); ax1.set_title('SOC Bands')
+                ax1.grid(alpha=0.3)
+                # 右: ΔE² vs k²
+                dk2 = (k - k0) ** 2
+                dE = np.abs(E_up - E_lo) * 1000
+                ax2.plot(dk2, dE ** 2, 'o', ms=5, color='#E24A33')
+                mask = dk2 <= kr ** 2
+                c2 = np.polyfit(dk2[mask], dE[mask] ** 2, 1)
+                xs = np.linspace(0, max(dk2[mask]) * 1.05, 100)
+                ax2.plot(xs, c2[0] * xs + c2[1], '-', color='#348ABD',
+                         label=f'Fit  R²={r2:.4f}')
+                ax2.set_xlabel(r'$(k - k_0)^2$  (Å$^{-2}$)')
+                ax2.set_ylabel(r'$\Delta E^2$  (meV$^2$)')
+                ax2.legend(fontsize=9); ax2.set_title(r'$\Delta E^2$ fit → $\sqrt{\alpha^2+\beta^2}$')
+                ax2.grid(alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(os.path.join(OUTPUT_DIR, 'soc_wannier_fit.png'), dpi=200, bbox_inches='tight')
+                plt.close()
+                print(f"  [Plot -> {OUTPUT_DIR}/soc_wannier_fit.png]")
     elif path:
         print("  [文件不存在]")
 
@@ -995,6 +1047,35 @@ def main_alpha_beta():
         if best_ratio is not None:
             ratio = best_ratio
             print(f"\n  → α/β = {ratio:.4f}  (取最优拟合)")
+
+            # 绘图: ⟨σ_x⟩ & ⟨σ_y⟩ vs k + 线性拟合
+            if _HAS_MPL:
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
+                for label, sx_s, sy_s, color in [
+                    (f"Band {up}", sx_up_s, sy_up_s, '#E24A33'),
+                    (f"Band {lo}", sx_lo_s, sy_lo_s, '#348ABD'),
+                ]:
+                    p_x = np.polyfit(kn, sx_s[near], 1)
+                    p_y = np.polyfit(kn, sy_s[near], 1)
+                    k_fit_line = np.linspace(min(kn), max(kn), 100)
+                    ax1.plot(k_scan[near], sx_s[near], 'o', ms=6, color=color, label=f'{label} data')
+                    ax1.plot(k0 + k_fit_line, np.polyval(p_x, k_fit_line), '-',
+                             color=color, alpha=0.6, label=f'{label} fit')
+                    ax2.plot(k_scan[near], sy_s[near], 'o', ms=6, color=color, label=f'{label} data')
+                    ax2.plot(k0 + k_fit_line, np.polyval(p_y, k_fit_line), '-',
+                             color=color, alpha=0.6, label=f'{label} fit')
+                ax1.axhline(0, color='gray', ls='--', alpha=0.3)
+                ax1.set_xlabel('k (Å⁻¹)'); ax1.set_ylabel(r'$\langle\sigma_x\rangle$')
+                ax1.legend(fontsize=8); ax1.set_title(r'$\langle\sigma_x\rangle$ vs k')
+                ax1.grid(alpha=0.3)
+                ax2.axhline(0, color='gray', ls='--', alpha=0.3)
+                ax2.set_xlabel('k (Å⁻¹)'); ax2.set_ylabel(r'$\langle\sigma_y\rangle$')
+                ax2.legend(fontsize=8); ax2.set_title(r'$\langle\sigma_y\rangle$ vs k')
+                ax2.grid(alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(os.path.join(OUTPUT_DIR, 'soc_spin_fit.png'), dpi=200, bbox_inches='tight')
+                plt.close()
+                print(f"  [Plot -> {OUTPUT_DIR}/soc_spin_fit.png]")
 
     # ---- Part 3: Combine ----
     print()
