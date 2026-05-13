@@ -54,6 +54,11 @@ OUTPUT_DIR = 'spinlife'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
+def _clean_input(text):
+    """去掉输入中的控制字符 (解决终端 Backspace 回显 ^H 等问题)."""
+    return ''.join(c for c in text if c >= ' ' or c == '\t').strip()
+
+
 def build_k_grid(kpoints):
     kx_vals = sorted(set(kp[0] for kp in kpoints))
     ky_vals = sorted(set(kp[1] for kp in kpoints))
@@ -569,7 +574,7 @@ def main_mobility():
 
         A0 = None
         try:
-            poscar = input("  -->> POSCAR 路径 (留空手动输入 A0): ").strip()
+            poscar = _clean_input(input("  -->> POSCAR 路径 (留空手动输入 A0): "))
             if poscar:
                 A0 = read_POSCAR_A0(poscar)
             if A0 is None:
@@ -764,9 +769,12 @@ def main_effmass_wannier():
     print("  有效质量 (Effective mass from Wannier bands)")
     print("=" * 65)
 
-    path = input("\n  -->> Wannier 能带文件路径 (wannier90_band.dat): ").strip()
-    if not path or not os.path.exists(path):
-        print("  [文件不存在]")
+    path = _clean_input(input("  -->> Wannier 能带文件路径 (wannier90_band.dat): "))
+    if not path:
+        print("  [空输入]")
+        return
+    if not os.path.exists(path):
+        print(f"  [文件不存在: {path}]")
         return
 
     k_frac, energies, nk, nbands = read_bands(path)
@@ -831,7 +839,7 @@ def main_alpha_beta():
 
     # ---- Part 1: √(α²+β²) from Wannier ----
     sqrt_ab = None
-    path = input("  -->> Wannier 能带文件路径 (留空跳过): ").strip()
+    path = _clean_input(input("  -->> Wannier 能带文件路径 (留空跳过): "))
     if path and os.path.exists(path):
         print("\n  [1/2] √(α²+β²) — Wannier SOC 能带拟合")
         k_frac, energies, nk, nbands = read_bands(path)
@@ -861,7 +869,7 @@ def main_alpha_beta():
 
     # ---- Part 2: α/β ratio from PROCAR (斜率拟合, 非点对点平均) ----
     ratio = None
-    procar_path = input("\n  -->> PROCAR 路径 (留空跳过): ").strip()
+    procar_path = _clean_input(input("\n  -->> PROCAR 路径 (留空跳过): "))
     if procar_path and os.path.exists(procar_path):
         print("\n  [2/2] α/β 比值 — PROCAR 自旋织构斜率拟合")
         print("  方法: ⟨σ_x⟩ = A·k,  ⟨σ_y⟩ = B·k  →  α/β = A/B")
@@ -1096,18 +1104,18 @@ def main_dump_band_menu():
     c = input("  -->> ").strip()
 
     if c == '1':
-        path = input("  -->> PROCAR 路径: ").strip()
+        path = _clean_input(input("  -->> PROCAR 路径: "))
         if not path or not os.path.exists(path):
-            print("  [文件不存在]")
+            print(f"  [文件不存在: {path}]")
             return
         procar = PROCAR(path)
         band = int(input(f"  能带序号 (1-{procar.nbands}): "))
         dump_band_data(procar, band)
 
     elif c == '2':
-        path = input("  -->> Wannier 能带文件路径: ").strip()
+        path = _clean_input(input("  -->> Wannier 能带文件路径: "))
         if not path or not os.path.exists(path):
-            print("  [文件不存在]")
+            print(f"  [文件不存在: {path}]")
             return
         k_frac, energies, nk, nbands = read_bands(path)
         band = int(input(f"  能带序号 (1-{nbands}): ")) - 1
