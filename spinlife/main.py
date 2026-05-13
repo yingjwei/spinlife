@@ -826,9 +826,7 @@ def _plot_effmass_result(k, E, k0, m, r2, k_range, band_label, filename,
     # 原始数据
     ax.plot(k, E - E_offset, 'o', ms=6, color='#ff0000', label=f'{band_label}')
 
-    # 极值点
-    marker = 'v' if 'VBM' in band_label else '^'
-    ax.plot(k0, np.interp(k0, k, E) - E_offset, marker, ms=10, color='#0000ff', zorder=5)
+    # 极值点 (去掉，仅保留数据点和拟合线)
 
     # 拟合曲线
     mask = np.abs(k - k0) <= k_range
