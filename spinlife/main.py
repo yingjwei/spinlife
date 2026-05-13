@@ -1467,7 +1467,8 @@ def main_genkpoints():
 
     kpoints = generate_grid(center, n_div, k_range, dim)
     write_kpoints(out, kpoints,
-                  comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})")
+                  comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})",
+                  center=center, k_range=k_range, n_div=n_div, dim=dim)
 
 
 if __name__ == '__main__':

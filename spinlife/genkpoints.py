@@ -52,7 +52,8 @@ def generate_grid(center, n_div, k_range=0.05, dim=2):
     return kpoints
 
 
-def write_kpoints(filename, kpoints, comment="spinlife generated"):
+def write_kpoints(filename, kpoints, comment="spinlife generated",
+                  center=None, k_range=None, n_div=None, dim=None):
     """写入 VASP KPOINTS (列表格式)."""
     nk = len(kpoints)
     with open(filename, 'w') as f:
@@ -63,8 +64,10 @@ def write_kpoints(filename, kpoints, comment="spinlife generated"):
         for kp in kpoints:
             f.write(f"  {kp[0]:.10f}  {kp[1]:.10f}  {kp[2]:.10f}  {kp[3]:.0f}\n")
     print(f"\n  [KPOINTS -> {os.path.abspath(filename)}]  ({nk} k-points)")
-    print(f"  中心: ({center[0]:.6f}, {center[1]:.6f}, {center[2]:.6f})")
-    print(f"  范围: ±{k_range}  ({dim}D, {n_div}点/方向)")
+    if center is not None:
+        print(f"  中心: ({center[0]:.6f}, {center[1]:.6f}, {center[2]:.6f})")
+    if k_range is not None:
+        print(f"  范围: ±{k_range}  ({dim or 2}D, {n_div or '?'}点/方向)")
     print(f"  (注意: 同名文件会被覆盖. 若 KPOINTS 已有重要内容请先备份.)")
     return nk
 
@@ -93,7 +96,9 @@ def main():
     out = input("  Output filename [KPOINTS]: ").strip() or "KPOINTS"
 
     kpoints = generate_grid(center, n_div, k_range, dim)
-    write_kpoints(out, kpoints, comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})")
+    write_kpoints(out, kpoints,
+                  comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})",
+                  center=center, k_range=k_range, n_div=n_div, dim=dim)
 
 
 if __name__ == '__main__':
