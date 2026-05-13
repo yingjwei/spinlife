@@ -1441,34 +1441,70 @@ def main_dump_band_menu():
 
 
 def main_genkpoints():
-    """选项 6: 生成 KPOINTS 文件"""
+    """选项 6: 读 Wannier 能带 → 选 SOC 带对 → 找 k₀ → 生成 KPOINTS"""
     from spinlife.genkpoints import generate_grid, write_kpoints
 
     print()
     print("=" * 65)
-    print("  生成 KPOINTS 文件 — 在指定 k 点附近生成密集网格")
+    print("  生成 KPOINTS — 从 Wannier 能带确定中心点后生成密集网格")
     print("=" * 65)
     print()
 
-    mstar_hint = ""
-    if _ctx['m_star']:
-        mstar_hint = f"  [当前 m* = {_ctx['m_star']:.4f} m₀, 可在 VBM 极值点附近生成]"
+    # 1) 读 Wannier 能带
+    path = _prompt_path("Wannier 能带文件路径", default_names=['wannier90_band.dat'])
+    if not path or not os.path.exists(path):
+        print("  [文件不存在]")
+        return
 
-    center = [
-        float(input(f"  Center kx (frac){mstar_hint}: ") or 0),
-        float(input(f"  Center ky (frac): ") or 0),
-        float(input(f"  Center kz (frac): ") or 0),
-    ]
+    labelinfo_path = path + '.labelinfo.dat'
+    labels_info = []
+    if os.path.exists(labelinfo_path):
+        labels_info = read_labelinfo(labelinfo_path)
+    nk_expected = labels_info[-1][0] + 1 if labels_info else None
 
-    k_range = float(input("  Range (±, frac coords) [0.05]: ") or 0.05)
-    n_div = int(input("  Divisions per direction [10]: ") or 10)
-    dim = int(input("  Dimension (2/3) [2]: ") or 2)
-    out = input("  Output filename [KPOINTS]: ").strip() or "KPOINTS"
+    k, energies, nk, nbands = load_band_data(path, nk_expected)
+    print(f"  能带数: {nbands},  k 点数: {nk}")
 
-    kpoints = generate_grid(center, n_div, k_range, dim)
+    if labels_info:
+        print(f"  k 路径: {' → '.join(lbl for _, _, lbl in labels_info)}")
+
+    # 2) 显示参考能带
+    mid = nk // 2
+    print(f"\n  路径中点附近能带 (用于选带):")
+    print(f"  {'Band':>6}  {'Energy(eV)':>12}")
+    low = max(0, nbands // 2 - 6)
+    high = min(nbands, nbands // 2 + 7)
+    for b in range(low, high):
+        print(f"  {b+1:>6}  {energies[mid, b]:>12.4f}")
+
+    # 3) 选 SOC 带对 → 自动找 k₀ (劈裂最小处)
+    up = int(input(f"\n  -->> SOC 上能带 (1-{nbands}): ")) - 1
+    lo = int(input(f"  -->> SOC 下能带 (1-{nbands}): ")) - 1
+    E_up = energies[:, up]
+    E_lo = energies[:, lo]
+    dE = np.abs(E_up - E_lo)
+    k0_idx = np.argmin(dE)
+    k0 = k[k0_idx]
+
+    print(f"\n  SOC 劈裂最小处: k₀ = ({k0:.6f}, 0, 0),  ΔE_min = {dE[k0_idx]*1000:.2f} meV")
+
+    # 4) 确认中心点
+    cx = float(input(f"\n  -->> KPOINTS 中心 kx [{k0:.6f}]: ") or k0)
+    cy = float(input(f"  -->> KPOINTS 中心 ky [0]: ") or 0)
+    cz = float(input(f"  -->> KPOINTS 中心 kz [0]: ") or 0)
+    center = [cx, cy, cz]
+
+    # 5) 网格参数
+    k_range = float(input("  -->> 范围 ± (分数坐标) [0.05]: ") or 0.05)
+    nx = int(input("  -->> kx 方向点数 [5]: ") or 5)
+    ny = int(input("  -->> ky 方向点数 [5]: ") or 5)
+    nz = int(input("  -->> kz 方向点数 [1]: ") or 1)
+    out = input("  -->> 输出文件名 [KPOINTS]: ").strip() or "KPOINTS"
+
+    kpoints = generate_grid(center, k_range, nx, ny, nz)
     write_kpoints(out, kpoints,
-                  comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})",
-                  center=center, k_range=k_range, n_div=n_div, dim=dim)
+                  comment=f"SOC band {up+1}/{lo+1} k0={k0:.4f}",
+                  center=center, k_range=k_range, nx=nx, ny=ny, nz=nz)
 
 
 if __name__ == '__main__':

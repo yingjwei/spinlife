@@ -16,35 +16,32 @@ import os
 import numpy as np
 
 
-def generate_grid(center, n_div, k_range=0.05, dim=2):
+def generate_grid(center, k_range, nx, ny, nz=1):
     """
-    生成围绕中心点的均匀 k 点网格.
+    生成围绕中心点的均匀 k 点网格 (各方向密度可单独指定).
 
     Parameters
     ----------
     center : (3,) array-like — 中心 k 点 (分数坐标)
-    n_div : int — 每个方向的网格点数
     k_range : float — 半宽 (分数坐标)
-    dim : int — 2 或 3
+    nx, ny, nz : int — 各方向网格点数 (nz=1 时生成 2D 网格)
 
     Returns
     -------
     kpoints : (N, 4) ndarray — kx ky kz weight
     """
-    grid_1d = np.linspace(-k_range, k_range, n_div)
-    if dim == 2:
-        kx, ky = np.meshgrid(center[0] + grid_1d, center[1] + grid_1d)
+    gx = np.linspace(-k_range, k_range, nx)
+    gy = np.linspace(-k_range, k_range, ny)
+    if nz <= 1:
+        kx, ky = np.meshgrid(center[0] + gx, center[1] + gy)
         kpoints = np.column_stack([
             kx.ravel(), ky.ravel(),
             np.full(kx.size, center[2]),
             np.ones(kx.size, dtype=int),
         ])
     else:
-        kx, ky, kz = np.meshgrid(
-            center[0] + grid_1d,
-            center[1] + grid_1d,
-            center[2] + grid_1d,
-        )
+        gz = np.linspace(-k_range, k_range, nz)
+        kx, ky, kz = np.meshgrid(center[0] + gx, center[1] + gy, center[2] + gz)
         kpoints = np.column_stack([
             kx.ravel(), ky.ravel(), kz.ravel(),
             np.ones(kx.size, dtype=int),
@@ -53,7 +50,7 @@ def generate_grid(center, n_div, k_range=0.05, dim=2):
 
 
 def write_kpoints(filename, kpoints, comment="spinlife generated",
-                  center=None, k_range=None, n_div=None, dim=None):
+                  center=None, k_range=None, nx=None, ny=None, nz=None):
     """写入 VASP KPOINTS (列表格式)."""
     nk = len(kpoints)
     with open(filename, 'w') as f:
@@ -67,7 +64,8 @@ def write_kpoints(filename, kpoints, comment="spinlife generated",
     if center is not None:
         print(f"  中心: ({center[0]:.6f}, {center[1]:.6f}, {center[2]:.6f})")
     if k_range is not None:
-        print(f"  范围: ±{k_range}  ({dim or 2}D, {n_div or '?'}点/方向)")
+        nz_str = f" x {nz}" if nz and nz > 1 else ""
+        print(f"  网格: {nx}×{ny}{nz_str}, 范围 ±{k_range}")
     print(f"  (注意: 同名文件会被覆盖. 若 KPOINTS 已有重要内容请先备份.)")
     return nk
 
@@ -88,17 +86,16 @@ def main():
             float(input("  Center kz (frac): ") or 0),
         ]
 
-    # 范围
-    global k_range, n_div, dim, out
     k_range = float(input("  Range (±, frac coords) [0.05]: ") or 0.05)
-    n_div = int(input("  Divisions per direction [10]: ") or 10)
-    dim = int(input("  Dimension (2/3) [2]: ") or 2)
+    nx = int(input("  kx 方向点数 [5]: ") or 5)
+    ny = int(input("  ky 方向点数 [5]: ") or 5)
+    nz = int(input("  kz 方向点数 [1]: ") or 1)
     out = input("  Output filename [KPOINTS]: ").strip() or "KPOINTS"
 
-    kpoints = generate_grid(center, n_div, k_range, dim)
+    kpoints = generate_grid(center, k_range, nx, ny, nz)
     write_kpoints(out, kpoints,
                   comment=f"K-mesh at ({center[0]:.4f},{center[1]:.4f},{center[2]:.4f})",
-                  center=center, k_range=k_range, n_div=n_div, dim=dim)
+                  center=center, k_range=k_range, nx=nx, ny=ny, nz=nz)
 
 
 if __name__ == '__main__':
