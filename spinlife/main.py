@@ -43,7 +43,8 @@ except ImportError:
     _HAS_MPL = False
 
 from spinlife.read_procar import PROCAR
-from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
+from spinlife.fit_soc import (fit_effmass, fit_alpha_beta,
+                              fit_alpha_beta_band_average, calc_spin_lifetime)
 from spinlife.mobility.calc_mobility import (read_POSCAR_A0, read_POSCAR_a,
                                              fit_C2D, fit_E1,
                                              calc_mu, C2D_Jm2_from_d2E,
@@ -182,20 +183,11 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     else:
         k0 = k_scan[np.argmin(E_slice)]
 
-    # --- 有效质量 ---
     k_step = (np.min(np.diff(sorted(set(k_scan))))
               if len(set(k_scan)) > 1 else 0.05)
     auto_k_range = max(k_range, k_step * 1.5)
 
-    m_star, r2_m, n_pts = fit_effmass(k_scan, E_slice, k0, auto_k_range)
-
-    if m_star:
-        print(f"  m* = {m_star:.2f} m0  (R^2={r2_m:.3f}, "
-              f"k0={k0:.3f}, range=+/-{auto_k_range:.3f})")
-    else:
-        print(f"  m*: fit failed ({n_pts} pts in +/-{auto_k_range})")
-
-    # --- SOC 劈裂 + alpha/beta ---
+    # --- SOC 劈裂 + 能带平均法 ---
     E_up = procar.get_band_energy(soc_upper)
     E_lo = procar.get_band_energy(soc_lower)
     sx_up, sy_up, sz_up = procar.get_spin(soc_upper)
@@ -222,16 +214,23 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     res['sx_up_scan'] = sx_up_scan
     res['sy_up_scan'] = sy_up_scan
 
-    ab_norm, Delta, r2_ab = fit_alpha_beta(
+    # --- 能带平均法: 同时拟合 m* 和 sqrt(a^2+b^2) ---
+    m_star, ab_norm, r2_p, r2_l, n_pts = fit_alpha_beta_band_average(
         k_scan, E_up_scan, E_lo_scan, k0, auto_k_range)
 
-    if ab_norm:
-        print(f"  sqrt(a^2+b^2) = {ab_norm*1000:.2f} meV.A")
-        print(f"  Delta         = {Delta*1000:.2f} meV  "
-              f"(R^2={r2_ab:.4f})")
-        res.update(ab_norm=ab_norm, Delta=Delta, r2_ab=r2_ab)
+    res['m_star'] = m_star
+    if m_star:
+        print(f"  m* = {m_star:.2f} m0  (parabola R^2={r2_p:.4f}, "
+              f"k0={k0:.3f}, range=+/-{auto_k_range:.3f}, {n_pts} pts)")
+        _ctx['m_star'] = m_star
 
-        # 自旋织构 -> alpha/beta 分离
+    if ab_norm:
+        _ctx['ab_norm_meva'] = ab_norm * 1000
+        print(f"  sqrt(a^2+b^2) = {ab_norm*1000:.2f} meV.A  "
+              f"(linear R^2={r2_l:.4f})")
+        res.update(ab_norm=ab_norm, r2_parab=r2_p, r2_linear=r2_l)
+
+        # --- 自旋织构 -> alpha/beta 分离 ---
         dk = np.abs(k_scan - k0)
         near = dk <= auto_k_range
         if np.sum(near) >= 3:
@@ -254,18 +253,31 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
                 print(f"  beta  = {beta*1000:.2f} meV.A")
                 res.update(alpha=alpha, beta=beta, ratio=ratio)
 
-                # --- 自旋寿命 ---
+                # --- 自旋寿命 (优先用 ab_norm) ---
                 if m_star:
-                    spin = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
+                    spin = calc_spin_lifetime(ab_norm=ab_norm*1000,
+                                              m_star=m_star, tau_p=tau_p, T=T)
                     if spin:
-                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps")
+                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
+                              f"(DP via sqrt(a^2+b^2))")
                         print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
                         res['spin'] = spin
             else:
                 print(f"  (spin ratio unstable: {ratio:.3f}, skip)")
                 res.update(alpha=None, beta=None, ratio=None)
+                # ab_norm 仍可用
+                if m_star:
+                    spin = calc_spin_lifetime(ab_norm=ab_norm*1000,
+                                              m_star=m_star, tau_p=tau_p, T=T)
+                    if spin:
+                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
+                              f"(via sqrt(a^2+b^2) only)")
+                        res['spin'] = spin
+        else:
+            print(f"  (only {np.sum(near)} k-points, skip spin texture)")
+            res.update(alpha=None, beta=None, ratio=None)
     else:
-        print(f"  alpha/beta: fit failed (R^2={r2_ab})")
+        print(f"  alpha/beta: fit failed (R^2={r2_l})")
 
     return res
 
@@ -1103,36 +1115,46 @@ def main_alpha_beta():
         except (EOFError, KeyboardInterrupt):
             kr = 0.05
 
-        ab_norm, Delta, r2 = fit_alpha_beta(k, E_up, E_lo, k0, kr)
+        m_star, ab_norm, r2_p, r2_l, n_pts = fit_alpha_beta_band_average(k, E_up, E_lo, k0, kr)
         if ab_norm:
             sqrt_ab = ab_norm
-            print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
-            print(f"  Δ       = {Delta*1000:.2f} meV  (R² = {r2:.4f})")
+            print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å  (linear R²={r2_l:.4f})")
+            if m_star:
+                print(f"  m*      = {m_star:.2f} m0  (parabola R²={r2_p:.4f}, {n_pts} pts)")
+                _ctx['m_star'] = m_star
 
-            # 绘图: ΔE² vs k² + 拟合 + SOC 能带
+            # 绘图: 能带平均 + 拟合
             if _HAS_MPL:
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                # 左: SOC 能带
-                mid = nk // 2
+                # 左: SOC 能带 + 带平均
+                E_avg = (E_up + E_lo) / 2
+                mask_k = np.abs(k - k0) <= kr
                 ax1.plot(k, E_up * 1000, 'o-', ms=2, lw=1, label=f'Band {up+1}')
                 ax1.plot(k, E_lo * 1000, 's-', ms=2, lw=1, label=f'Band {lo+1}')
+                ax1.plot(k, E_avg * 1000, '-', lw=2, color='#2E8B57', alpha=0.7, label='E_avg')
+                if m_star:
+                    A_coeff = 3.81 / m_star
+                    k2_fit = (k[mask_k] - k0) ** 2
+                    E_parab = (A_coeff * k2_fit + np.mean(E_avg[mask_k])) * 1000
+                    ax1.plot(k[mask_k], E_parab, '--', lw=1.5, color='#1a6b3c', label='parabola fit')
                 ax1.axvspan(k0 - kr, k0 + kr, alpha=0.12, color='blue', label='fit range')
                 ax1.axvline(k0, color='gray', ls='--', alpha=0.4)
-                ax1.set_xlabel('k (Å⁻¹)'); ax1.set_ylabel('E (meV)')
-                ax1.legend(fontsize=8); ax1.set_title('SOC Bands')
+                ax1.set_xlabel('k (Ang^-1)'); ax1.set_ylabel('E (meV)')
+                ax1.legend(fontsize=8); ax1.set_title('SOC Bands + Band Average')
                 ax1.grid(alpha=0.3)
-                # 右: ΔE² vs k²
-                dk2 = (k - k0) ** 2
-                dE = np.abs(E_up - E_lo) * 1000
-                ax2.plot(dk2, dE ** 2, 'o', ms=5, color='#E24A33')
-                mask = dk2 <= kr ** 2
-                c2 = np.polyfit(dk2[mask], dE[mask] ** 2, 1)
-                xs = np.linspace(0, max(dk2[mask]) * 1.05, 100)
-                ax2.plot(xs, c2[0] * xs + c2[1], '-', color='#348ABD',
-                         label=f'Fit  R²={r2:.4f}')
-                ax2.set_xlabel(r'$(k - k_0)^2$  (Å$^{-2}$)')
-                ax2.set_ylabel(r'$\Delta E^2$  (meV$^2$)')
-                ax2.legend(fontsize=9); ax2.set_title(r'$\Delta E^2$ fit → $\sqrt{\alpha^2+\beta^2}$')
+                # 右: |E_up - E_lo|/2 vs |k-k0| (linear fit)
+                abs_k = np.abs(k - k0)
+                dE_half = np.abs(E_up - E_lo) / 2 * 1000
+                ax2.plot(abs_k, dE_half, 'o', ms=5, color='#E24A33')
+                mask_l = (abs_k <= kr) & (abs_k > 1e-10)
+                if np.sum(mask_l) >= 2:
+                    c_lin = np.polyfit(abs_k[mask_l], dE_half[mask_l], 1)
+                    xs = np.linspace(0, kr * 1.05, 100)
+                    ax2.plot(xs, c_lin[0] * xs + c_lin[1], '-', color='#348ABD',
+                             label=f'Fit slope={c_lin[0]:.2f} meV/A')
+                ax2.set_xlabel(r'$|k - k_0|$  (Ang^{-1}$)')
+                ax2.set_ylabel(r'$|E_{up} - E_{lo}|/2$  (meV)')
+                ax2.legend(fontsize=9); ax2.set_title(r'Linear fit -> sqrt(alpha^2+beta^2)')
                 ax2.grid(alpha=0.3)
                 plt.tight_layout()
                 plt.savefig(os.path.join(OUTPUT_DIR, 'soc_wannier_fit.png'), dpi=200, bbox_inches='tight')
