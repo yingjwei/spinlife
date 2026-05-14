@@ -1214,11 +1214,6 @@ def main_alpha_beta():
         idx_slice, k_scan, order = get_k_slice(kpts, procar)
         k0 = k_scan[np.argmin(np.abs(k_scan))]
 
-        try:
-            kr = float(input("  -->> 拟合范围 ±Δk (Å⁻¹) [0.05]: ") or 0.05)
-        except (EOFError, KeyboardInterrupt):
-            kr = 0.05
-
         near = (np.abs(k_scan - k0) <= kr) & (np.abs(k_scan - k0) > 1e-10)
 
         # 排序后的切片自旋数据
@@ -1231,9 +1226,8 @@ def main_alpha_beta():
         print(f"\n  {'k (Å⁻¹)':>10}  {'⟨σ_x⟩':>10}  {'⟨σ_y⟩':>10}  {'⟨σ_x⟩/⟨σ_y⟩':>12}")
         print(f"  {'-'*46}")
         for i in range(len(k_scan)):
-            if near[i]:
-                r_str = f"{sx_up_s[i]/sy_up_s[i]:.2f}" if abs(sy_up_s[i]) > 1e-10 else "-"
-                print(f"  {k_scan[i]:>10.4f}  {sx_up_s[i]:>10.4f}  "
+            r_str = f"{sx_up_s[i]/sy_up_s[i]:.2f}" if abs(sy_up_s[i]) > 1e-10 else "-"
+            print(f"  {k_scan[i]:>10.4f}  {sx_up_s[i]:>10.4f}  "
                       f"{sy_up_s[i]:>10.4f}  {r_str:>12}")
 
         # Gamma 点做比: 取 k0 最近邻且 Sx, Sy 可靠的点
