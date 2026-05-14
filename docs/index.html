@@ -117,19 +117,17 @@ E_avg = (E_upper + E_lower) / 2 = E0 + A(k-k0)^2
 
 <p><b>数据来源:</b> VASP LSORBIT PROCAR (Gamma 附近自旋分量)</p>
 
-<p>从 k.p 模型, <sigma_x> = 2*alpha*k/Delta, <sigma_y> = 2*beta*k/Delta, 在 Gamma 附近与 k 成线性关系, 斜率比 alpha/beta 与 k 无关:</p>
+<p>从 k.p 一阶近似, <sigma_x> = 2*alpha*k/Delta, <sigma_y> = 2*beta*k/Delta, 故在任意非 Gamma k 点处:</p>
 
 <pre>
-对 k 点 (排除 Gamma) 分别拟合 <sigma_x> vs k 和 <sigma_y> vs k:
-  <sigma_x> = A*k + C1  ->  斜率 A = 2*alpha/Delta
-  <sigma_y> = B*k + C2  ->  斜率 B = 2*beta/Delta
-
-  alpha/beta = A/B
+<sigma_x> / <sigma_y> = alpha / beta    (比值与 k 无关)
 </pre>
 
-<p>PROCAR 自旋期望值在面外 PST 体系中噪声较大. 程序自动评估拟合质量:</p>
+<p><b>Gamma 点直接做比:</b> 程序遍历 SOC 双带, 取 Gamma 附近最近邻且 |Sx|,|Sy| > 1e-3 的 k 点, 直接计算 Sx/Sy 作为 alpha/beta. 这避免了多 k 点线性拟合中不同方向自旋响应混合导致的失真.</p>
+
+<p>面外 PST 体系中 PROCAR 自旋期望值极小 (~0.001). 程序自动评估:</p>
 <ul>
-  <li>alpha/beta 比值稳定 (|ratio| > 1e-6): 用于 alpha/beta 分离和 L_PSH 计算</li>
+  <li>比值稳定 (1e-6 < |ratio| < 1e6): 用于 alpha/beta 分离和 L_PSH 计算</li>
   <li>比值不稳定: 自动跳过, 但 tau_s 仍可通过 sqrt(alpha^2+beta^2) 估算</li>
 </ul>
 
