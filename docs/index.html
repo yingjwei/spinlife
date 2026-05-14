@@ -58,7 +58,7 @@ tr:hover { background: #f0f5ff; }
 
 <p><b>选项 1:</b> 应变-总能量 → C₂D, E₁, μ, τ_p (x + y 双方向, 各向异性 m*)</p>
 <p><b>选项 2:</b> 读 <code>wannier90_band.dat</code> → 抛物线拟合 → m* (密 k 网格, 可靠)</p>
-<p><b>选项 3:</b> Wannier 密能带 ΔE² vs k² 拟合 (自动扫描最优 Δk) → √(α²+β²); PROCAR Γ 点直接做比 → α/β 比值; 自动输出统一 m*; 结合得 α, β</p>
+<p><b>选项 3:</b> Wannier 自动扫描 Δk: ΔE² vs k² 独立选最优 → √(α²+β²); 抛物线独立选最优 → m* (与选项 2 统一); PROCAR Γ 点直接做比 → α/β 比值</p>
 <p><b>选项 4:</b> 整合前三步结果, 自动装载已知的 m*, α, β, τ<sub>p</sub> → τ<sub>s</sub>, L<sub>PSH</sub></p>
 <p><b>选项 6:</b> 读 Wannier 能带 → 选 SOC 带对 → 自动定位 k₀ → 各方向独立设置密度 → 生成 KPOINTS</p>
 
@@ -94,6 +94,8 @@ m*/m₀ = 3.81 / |A|        (3.81 = ℏ²/2m₀ in eV·Å²)
 √(α²+β²) = √(slope) / 2       (eV·Å)
 Δ = √(intercept) / 2           (eV)
 </pre>
+
+<p>同时自动扫描有效质量 m*: Wannier 密 k 网格对 <b>E<sub>up</sub></b> 做抛物线拟合, 与 √(α²+β²) 各自独立扫描最优 Δk, 与选项 2 统一.</p>
 
 <p>Wannier 密 k 网格提供几百个 k 点, 拟合可靠性远超 VASP 稀疏 k 网格.</p>
 
