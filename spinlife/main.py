@@ -52,6 +52,8 @@ from spinlife.wannier import load_band_data, read_bands, k_to_reciprocal, find_e
 
 # 所有输出文件统一放入 spinlife/ 目录 (放在最前, 函数默认参数需用到)
 OUTPUT_DIR = 'spinlife'
+SESSION_FILE = os.path.join(OUTPUT_DIR, 'session.json')
+MOBILITY_CFG = os.path.join(OUTPUT_DIR, 'mobility_input.txt')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -281,6 +283,113 @@ _ctx = {
 }
 
 
+def _save_session():
+    """保存当前会话状态到 spinlife/session.json"""
+    import json
+    try:
+        with open(SESSION_FILE, 'w') as f:
+            json.dump(_ctx, f, indent=2)
+    except Exception:
+        pass
+
+
+def _load_session():
+    """从 spinlife/session.json 加载会话状态"""
+    import json
+    if not os.path.exists(SESSION_FILE):
+        return
+    try:
+        with open(SESSION_FILE, 'r') as f:
+            saved = json.load(f)
+        for k in _ctx:
+            if k in saved and saved[k] is not None:
+                _ctx[k] = saved[k]
+        print(f"  [已读档: {SESSION_FILE}]")
+    except Exception:
+        pass
+
+
+def _gen_mobility_config():
+    """生成迁移率输入模板 (若不存在)."""
+    if os.path.exists(MOBILITY_CFG):
+        return
+    lines = [
+        '# spinlife mobility input',
+        '# Edit this file, then run option 1 to load.',
+        '',
+        '# T = temperature (K)',
+        '# A0 = lattice area (A^2), leave blank for interactive input',
+        '# strain% = strain in percent (e.g. -3 = -3%)',
+        '# energy = total energy (eV), same order as strain',
+        '# vbm/cbm = VBM/CBM band edge energy (eV), can omit',
+        '# m_vbm/m_cbm = effective mass (m0), can omit',
+        '# [X] / [Y] sections for each direction',
+        '',
+        'T = 300',
+        'A0 =',
+        '',
+        '[X]',
+        'strain% = -3  -2  -1  0  1  2  3',
+        'energy = -277.483  -277.625  -277.732  -277.749  -277.746  -277.723  -277.672',
+        'vbm = -2.557  -2.628  -2.739  -2.763  -2.791  -2.817  -2.843',
+        'cbm = -2.222  -2.282  -2.374  -2.401  -2.430  -2.461  -2.490',
+        'm_vbm =',
+        'm_cbm =',
+        '',
+        '[Y]',
+        'strain% = -3  -2  -1  0  1  2  3',
+        'energy = -277.483  -277.625  -277.732  -277.749  -277.746  -277.723  -277.672',
+        'vbm = -2.557  -2.628  -2.739  -2.763  -2.791  -2.817  -2.843',
+        'm_vbm =',
+        '',
+    ]
+    try:
+        with open(MOBILITY_CFG, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        print(f"  [generated template: {MOBILITY_CFG}]")
+    except Exception as e:
+        print(f"  [warning: could not write {MOBILITY_CFG}: {e}]")
+
+
+def _read_mobility_config():
+    """读 spinlife/mobility_input.txt, 返回 dict {dir: {param: values}}."""
+    if not os.path.exists(MOBILITY_CFG):
+        return None
+    result = {}
+    current_section = '_global'
+    with open(MOBILITY_CFG, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line.startswith('[') and line.endswith(']'):
+                sec = line[1:-1].upper()
+                if sec in ('X', 'Y'):
+                    current_section = sec
+                continue
+            if '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            key = key.strip().lower()
+            val = val.strip()
+            d = result.setdefault(current_section, {})
+            if not val:
+                d[key] = None
+                continue
+            parts = val.split()
+            numbers = []
+            for p in parts:
+                try:
+                    numbers.append(float(p))
+                except ValueError:
+                    pass
+            if current_section == '_global':
+                d[key] = numbers[0] if len(numbers) == 1 else (numbers if numbers else None)
+            else:
+                d[key] = np.array(numbers) if numbers else None
+    return result if result else None
+
+
 def _ctx_summary():
     """当前工作区状态摘要"""
     parts = []
@@ -333,6 +442,8 @@ def _show_main_menu():
 
 def _interactive_menu():
     """全功能交互式菜单循环"""
+    _load_session()
+    _gen_mobility_config()
     while True:
         _show_main_menu()
         try:
@@ -795,11 +906,16 @@ def main_mobility():
     print()
     print("  μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)")
 
-    T = 300
-    try:
-        T = float(input(f"\n  -->> 温度 T (K) [{T}]: ") or T)
-    except (EOFError, KeyboardInterrupt):
-        pass
+    cfg_all = _read_mobility_config()
+    if cfg_all and cfg_all.get('_global', {}).get('t'):
+        T = float(cfg_all['_global']['t'])
+        print(f"  T = {T} K  [from {MOBILITY_CFG}]")
+    else:
+        T = 300
+        try:
+            T = float(input(f"\n  -->> 温度 T (K) [{T}]: ") or T)
+        except (EOFError, KeyboardInterrupt):
+            pass
 
     all_data = {}
 
@@ -817,28 +933,50 @@ def main_mobility():
         print(f"  [{dir_label.upper()}] 方向")
         print("=" * 65)
 
-        # --- 自动扫描 OUTCAR ---
-        auto = _auto_scan_mobility(dir_label)
-        strain, energy = None, None
-        s_vbm_data, e_vbm_data = None, None
-        s_cbm_data, e_cbm_data = None, None
+        # 初始化 (config 成功则覆盖)
+        strain = energy = None
+        s_vbm_data = e_vbm_data = None
+        s_cbm_data = e_cbm_data = None
+        A0_cfg = m_vbm_cfg = m_cbm_cfg = None
 
-        if auto:
-            print(f"\n  检测到 OUTCAR 文件 ({dir_label.upper()}), 共 {len(auto['strain_data'])} 个应力点:")
-            for s, e in auto['strain_data']:
-                print(f"    ε = {s*100:+.2f}%  →  E = {e:.6f} eV")
-            if auto['e1_data']:
-                print(f"  EIGENVAL (E₁): {len(auto['e1_data'])} 个点")
-                for s, v in auto['e1_data']:
-                    print(f"    ε = {s*100:+.2f}%  →  VBM = {v:.6f} eV")
-            if input("\n  -->> 自动使用以上数据？(Y/n): ").strip().lower() != 'n':
-                sd = np.array(auto['strain_data'])
-                strain = sd[:, 0]
-                energy = sd[:, 1]
+        # --- 优先读 config 文件 ---
+        if cfg_all:
+            dir_cfg = cfg_all.get(dir_label.upper())
+            if dir_cfg and dir_cfg.get('strain%') is not None:
+                strain = dir_cfg['strain%'] / 100  # % → decimal
+                if dir_cfg.get('energy') is not None:
+                    energy = dir_cfg['energy']
+                if dir_cfg.get('vbm') is not None:
+                    s_vbm_data, e_vbm_data = strain, dir_cfg['vbm']
+                if dir_cfg.get('cbm') is not None:
+                    s_cbm_data, e_cbm_data = strain, dir_cfg['cbm']
+                A0_cfg = cfg_all.get('_global', {}).get('a0')
+                m_vbm_cfg = dir_cfg.get('m_vbm')
+                m_cbm_cfg = dir_cfg.get('m_cbm')
+                print(f"\n  [从 {MOBILITY_CFG} 读取 {dir_label.upper()} 方向数据]")
+                print(f"    {len(strain)} 个应力点"
+                      f"  VBM: {'✓' if dir_cfg.get('vbm') is not None else '✗'}"
+                      f"  CBM: {'✓' if dir_cfg.get('cbm') is not None else '✗'}")
+
+        # --- 自动扫描 OUTCAR ---
+        if strain is None:
+            auto = _auto_scan_mobility(dir_label)
+            if auto:
+                print(f"\n  检测到 OUTCAR 文件 ({dir_label.upper()}), 共 {len(auto['strain_data'])} 个应力点:")
+                for s, e in auto['strain_data']:
+                    print(f"    ε = {s*100:+.2f}%  →  E = {e:.6f} eV")
                 if auto['e1_data']:
-                    e1d = np.array(auto['e1_data'])
-                    s_vbm_data = e1d[:, 0]
-                    e_vbm_data = e1d[:, 1]
+                    print(f"  EIGENVAL (E₁): {len(auto['e1_data'])} 个点")
+                    for s, v in auto['e1_data']:
+                        print(f"    ε = {s*100:+.2f}%  →  VBM = {v:.6f} eV")
+                if input("\n  -->> 自动使用以上数据？(Y/n): ").strip().lower() != 'n':
+                    sd = np.array(auto['strain_data'])
+                    strain = sd[:, 0]
+                    energy = sd[:, 1]
+                    if auto['e1_data']:
+                        e1d = np.array(auto['e1_data'])
+                        s_vbm_data = e1d[:, 0]
+                        e_vbm_data = e1d[:, 1]
 
         if strain is None:
             # --- 手动输入: 先试表格, 再逐行 ---
@@ -868,14 +1006,18 @@ def main_mobility():
         print(f"  d2E/deps2 = {d2E:.4f} eV,  R^2 = {r2_e:.6f}")
 
         A0 = None
-        try:
-            poscar = _prompt_path("POSCAR 路径", default_names=['POSCAR'], allow_skip=True)
-            if poscar:
-                A0 = read_POSCAR_A0(poscar)
-            if A0 is None:
-                A0 = float(input("  -->> A0 (A^2): "))
-        except (EOFError, KeyboardInterrupt):
-            pass
+        if A0_cfg:
+            A0 = A0_cfg
+            print(f"  A0 = {A0:.2f} Å²  [from {MOBILITY_CFG}]")
+        if A0 is None:
+            try:
+                poscar = _prompt_path("POSCAR 路径", default_names=['POSCAR'], allow_skip=True)
+                if poscar:
+                    A0 = read_POSCAR_A0(poscar)
+                if A0 is None:
+                    A0 = float(input("  -->> A0 (A^2): "))
+            except (EOFError, KeyboardInterrupt):
+                pass
 
         C2D = C2D_Jm2_from_d2E(d2E, A0) if A0 else None
         if C2D:
@@ -915,13 +1057,24 @@ def main_mobility():
         m_vbm, m_cbm = None, None
         mstar_ctx = _ctx.get('m_star')
         mstar_hint = f" [Wannier: {mstar_ctx:.4f}]" if mstar_ctx else ""
-        try:
-            if E1_vbm is not None:
-                m_vbm = float(input(f"\n  -->> m* (VBM, {dir_label}方向, m0){mstar_hint}: "))
-            if E1_cbm is not None:
-                m_cbm = float(input(f"  -->> m* (CBM, {dir_label}方向, m0){mstar_hint}: "))
-        except (EOFError, KeyboardInterrupt):
-            pass
+        if E1_vbm is not None:
+            if m_vbm_cfg:
+                m_vbm = m_vbm_cfg
+                print(f"  m* (VBM, {dir_label}) = {m_vbm:.4f} m₀  [from {MOBILITY_CFG}]")
+            else:
+                try:
+                    m_vbm = float(input(f"\n  -->> m* (VBM, {dir_label}方向, m0){mstar_hint}: "))
+                except (EOFError, KeyboardInterrupt):
+                    pass
+        if E1_cbm is not None:
+            if m_cbm_cfg:
+                m_cbm = m_cbm_cfg
+                print(f"  m* (CBM, {dir_label}) = {m_cbm:.4f} m₀  [from {MOBILITY_CFG}]")
+            else:
+                try:
+                    m_cbm = float(input(f"  -->> m* (CBM, {dir_label}方向, m0){mstar_hint}: "))
+                except (EOFError, KeyboardInterrupt):
+                    pass
 
         all_data[dir_label] = {
             'strain': strain, 'energy': energy, 'coeffs': coeffs,
@@ -1065,6 +1218,7 @@ def main_mobility():
                 f.write(f"mu_e: {dat['mu_e']:.2f} cm^2/V.s, tau_p: {dat['tau_e']:.4f} ps\n")
             f.write("\n")
     print(f"\n  [Report: {OUTPUT_DIR}/mobility_report.txt]")
+    _save_session()
     print("=" * 65)
 
 
@@ -1307,6 +1461,7 @@ def main_effmass_wannier():
         if 'gap' in locals():
             print(f"  Eg     = {gap:.4f} eV")
     print(f"\n  说明: 选取 R² > 0.97 的最小范围结果为最佳")
+    _save_session()
 
 
 def main_alpha_beta():
@@ -1535,6 +1690,7 @@ def main_alpha_beta():
     elif not sqrt_ab and ratio:
         print(f"\n  α/β = {ratio:.4f}")
         print("  (缺少 √(α²+β²), 需运行 Wannier 部分)")
+    _save_session()
 
 
 def main_spin_lifetime_menu():
@@ -1658,6 +1814,7 @@ def main_spin_lifetime_menu():
             f.write(f"tau_s  = {result['tau_s_ps']:.2f} ps\n")
             f.write(f"L_PSH  = {result['L_PSH_um']:.2f} um\n")
         print(f"  [报告 -> {OUTPUT_DIR}/spinlife_report.txt]")
+    _save_session()
 
 
 def main_dump_band_menu():
