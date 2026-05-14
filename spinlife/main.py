@@ -1096,45 +1096,49 @@ def main_alpha_beta():
         dE = np.abs(E_up - E_lo)
         k0 = k[np.argmin(dE)]
 
-        # Auto-scan dk to find optimal fitting range
+        # Auto-scan dk — independently optimize Δk for ΔE² fit and m* fit
         print()
-        print("  >> Auto-scanning dk for best fit...")
+        print("  >> Auto-scanning dk...")
         print(f"  {'dk_max':>8s}  {'pts':>5s}  {'R2_dE2':>8s}  {'m*':>7s}  {'R2_m':>8s}")
         print(f"  {'-'*45}")
-        scan_results = []
+        scan_dE2 = []   # (dk, ab_norm, Delta, r2)
+        scan_m = []     # (dk, m_star, r2, npts)
         for dk_try in np.arange(0.003, 0.151, 0.002):
             ab_norm_try, Delta_try, r2_dE2 = fit_alpha_beta(k, E_up, E_lo, k0, dk_try)
             ms_try, r2_m, npts = fit_effmass(k, E_up, k0, dk_try)
+            ms_str = f"{ms_try:.2f}" if ms_try else "-"
+            print(f"  {dk_try:>8.3f}  {npts:>5d}  {r2_dE2:>8.4f}  {ms_str:>7s}  {r2_m:>8.4f}")
             if ab_norm_try is not None:
-                scan_results.append((dk_try, ab_norm_try, Delta_try, r2_dE2, ms_try, r2_m, npts))
-                ms_str = f"{ms_try:.2f}" if ms_try else "-"
-                print(f"  {dk_try:>8.3f}  {npts:>5d}  {r2_dE2:>8.4f}  {ms_str:>7s}  {r2_m:>8.4f}")
+                scan_dE2.append((dk_try, ab_norm_try, Delta_try, r2_dE2))
+            if ms_try:
+                scan_m.append((dk_try, ms_try, r2_m, npts))
 
-        # Select dk with best ΔE² fit quality (R2_dE2), the m* is a secondary output
-        scan_sorted = sorted(scan_results, key=lambda x: -x[3])  # sort by R2_dE2 descending
-        best_kr, best_ab, best_Delta, best_r2 = scan_sorted[0][0], scan_sorted[0][1], scan_sorted[0][2], scan_sorted[0][3]
-
-        if best_r2 >= 0.7:
-            print(f"\n  >> Best dk = {best_kr:.3f} 1/A  (R²_ΔE² = {best_r2:.4f})")
+        # Best dk for ΔE² fit → √(α²+β²)
+        if scan_dE2:
+            best_dE2 = max(scan_dE2, key=lambda x: x[3])
+            kr_ab, ab_norm, Delta, r2_dE2 = best_dE2
+            print(f"\n  >> √(α²+β²): Δk = {kr_ab:.3f} 1/A  (R²_ΔE² = {r2_dE2:.4f})")
         else:
-            print(f"\n  >> Best available dk = {best_kr:.3f} 1/A  (R²_ΔE² = {best_r2:.4f}, <0.7)")
+            kr_ab, ab_norm, Delta, r2_dE2 = 0.05, None, None, 0
 
-        kr = best_kr
-        ab_norm = best_ab
-        Delta = best_Delta
-        r2 = best_r2
+        # Best dk for parabola fit → m* (independent selection)
+        if scan_m:
+            best_m = max(scan_m, key=lambda x: x[2])
+            kr_m, m_star, r2_m, n_pts_m = best_m
+            print(f"  >> m*:          Δk = {kr_m:.3f} 1/A  (R²_m = {r2_m:.4f})")
+        else:
+            kr_m, m_star, r2_m, n_pts_m = 0.05, None, 0, 0
 
-        # Single-band parabola fit for m* (consistent with menu option 2)
-        m_star, r2_m, n_pts_m = fit_effmass(k, E_up, k0, kr)
+        kr = kr_ab
         if m_star:
             _ctx['m_star'] = m_star
 
         if ab_norm:
             sqrt_ab = ab_norm
             print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
-            print(f"  Δ       = {Delta*1000:.2f} meV  (R² = {r2:.4f})")
+            print(f"  Δ       = {Delta*1000:.2f} meV  (R² = {r2_dE2:.4f})")
             if m_star:
-                print(f"  m*      = {m_star:.2f} m₀  (R² = {r2_m:.4f}, {n_pts_m} pts)")
+                print(f"  m*      = {m_star:.2f} m₀  (R² = {r2_m:.4f}, Δk = {kr_m:.3f}, {n_pts_m} pts)")
 
             # 绘图: ΔE² vs k² + 拟合 + SOC 能带
             if _HAS_MPL:
@@ -1156,7 +1160,7 @@ def main_alpha_beta():
                 c2 = np.polyfit(dk2[mask], dE[mask] ** 2, 1)
                 xs = np.linspace(0, max(dk2[mask]) * 1.05, 100)
                 ax2.plot(xs, c2[0] * xs + c2[1], '-', color='#348ABD',
-                         label=f'Fit  R²={r2:.4f}')
+                         label=f'Fit  R²={r2_dE2:.4f}')
                 ax2.set_xlabel(r'$(k - k_0)^2$  (Å$^{-2}$)')
                 ax2.set_ylabel(r'$\Delta E^2$  (meV$^2$)')
                 ax2.legend(fontsize=9); ax2.set_title(r'$\Delta E^2$ fit → $\sqrt{\alpha^2+\beta^2}$')
