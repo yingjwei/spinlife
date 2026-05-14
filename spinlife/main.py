@@ -229,52 +229,52 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
               f"(linear R^2={r2_l:.4f})")
         res.update(ab_norm=ab_norm, r2_parab=r2_p, r2_linear=r2_l)
 
-        # --- 自旋织构 -> alpha/beta 分离 ---
+        # --- 自旋织构 -> alpha/beta 分离 (Gamma 点做比) ---
         dk = np.abs(k_scan - k0)
         near = dk <= auto_k_range
-        if np.sum(near) >= 3:
-            kn = k_scan[near] - k0
-            p_x = np.polyfit(kn, sx_up_scan[near], 1)
-            p_y = np.polyfit(kn, sy_up_scan[near], 1)
-            ratio = p_x[0] / (p_y[0] + 1e-30) if abs(p_y[0]) > 1e-30 else 1e6
+        ratio = None
+        for sx_s, sy_s in [(sx_up_scan, sy_up_scan), (sx_lo_scan, sy_lo_scan)]:
+            order_k = np.argsort(dk)
+            for idx in order_k:
+                if dk[idx] < 1e-10 or not near[idx]:
+                    continue
+                if abs(sx_s[idx]) > 1e-3 and abs(sy_s[idx]) > 1e-3:
+                    r = sx_s[idx] / sy_s[idx]
+                    if ratio is None or abs(r) > abs(ratio):
+                        ratio = r
+                    break
 
-            p_x2 = np.polyfit(kn, sx_lo_scan[near], 1)
-            p_y2 = np.polyfit(kn, sy_lo_scan[near], 1)
-            ratio2 = p_x2[0] / (p_y2[0] + 1e-30) if abs(p_y2[0]) > 1e-30 else 1e6
-            if abs(ratio2) > abs(ratio):
-                ratio = ratio2
+        if ratio is not None and abs(ratio) > 1e-6 and abs(ratio) < 1e6:
+            alpha = ab_norm / np.sqrt(1 + 1 / ratio**2)
+            beta = alpha / ratio
+            print(f"  <sx>/<sy> ratio = {ratio:.3f}")
+            print(f"  alpha = {alpha*1000:.2f} meV.A")
+            print(f"  beta  = {beta*1000:.2f} meV.A")
+            res.update(alpha=alpha, beta=beta, ratio=ratio)
 
-            if abs(ratio) > 1e-6 and abs(ratio) < 1e6:
-                alpha = ab_norm / np.sqrt(1 + 1 / ratio**2)
-                beta = alpha / ratio
-                print(f"  <sx>/<sy> ratio = {ratio:.3f}")
-                print(f"  alpha = {alpha*1000:.2f} meV.A")
-                print(f"  beta  = {beta*1000:.2f} meV.A")
-                res.update(alpha=alpha, beta=beta, ratio=ratio)
-
-                # --- 自旋寿命 (使用分离后的 α, β) ---
-                if m_star:
-                    spin = calc_spin_lifetime(alpha=alpha*1000,
-                                              beta=beta*1000,
-                                              m_star=m_star, tau_p=tau_p, T=T)
-                    if spin:
-                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
-                              f"(DP: alpha={alpha*1000:.2f}, beta={beta*1000:.2f})")
-                        print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
-                        res['spin'] = spin
-            else:
-                print(f"  (spin ratio unstable: {ratio:.3f}, skip)")
-                res.update(alpha=None, beta=None, ratio=None)
-                # ab_norm 仍可用
-                if m_star:
-                    spin = calc_spin_lifetime(ab_norm=ab_norm*1000,
-                                              m_star=m_star, tau_p=tau_p, T=T)
-                    if spin:
-                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
-                              f"(via sqrt(a^2+b^2) only)")
-                        res['spin'] = spin
+            # --- 自旋寿命 (使用分离后的 alpha, beta) ---
+            if m_star:
+                spin = calc_spin_lifetime(alpha=alpha*1000,
+                                          beta=beta*1000,
+                                          m_star=m_star, tau_p=tau_p, T=T)
+                if spin:
+                    print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
+                          f"(DP: alpha={alpha*1000:.2f}, beta={beta*1000:.2f})")
+                    print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
+                    res['spin'] = spin
+        elif ratio is not None:
+            print(f"  (spin ratio unstable: {ratio:.3f}, skip)")
+            res.update(alpha=None, beta=None, ratio=None)
+            # ab_norm 仍可用
+            if m_star:
+                spin = calc_spin_lifetime(ab_norm=ab_norm*1000,
+                                          m_star=m_star, tau_p=tau_p, T=T)
+                if spin:
+                    print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
+                          f"(via sqrt(a^2+b^2) only)")
+                    res['spin'] = spin
         else:
-            print(f"  (only {np.sum(near)} k-points, skip spin texture)")
+            print(f"  (no in-range k-point with reliable Sx/Sy)")
             res.update(alpha=None, beta=None, ratio=None)
     else:
         print(f"  alpha/beta: fit failed (R^2={r2_l})")
@@ -1075,7 +1075,7 @@ def main_alpha_beta():
     print("=" * 65)
     print()
     print("  方法: Wannier SOC 双带 → 能带平均法 → m* + √(α²+β²)")
-    print("        PROCAR 自旋织构斜率拟合 → α/β 比值")
+    print("        PROCAR 自旋织构 (Gamma 点直接做比) → α/β 比值")
     print()
 
     # ---- Part 1: √(α²+β²) from Wannier ----
@@ -1163,7 +1163,7 @@ def main_alpha_beta():
     elif path:
         print("  [文件不存在]")
 
-    # ---- Part 2: α/β ratio from PROCAR (斜率拟合, 非点对点平均) ----
+    # ---- Part 2: α/β ratio from PROCAR (Gamma 点直接做比) ----
     ratio = None
     procar_path = _prompt_path("PROCAR 路径", default_names=['PROCAR'], allow_skip=True)
     if procar_path and os.path.exists(procar_path):
@@ -1189,7 +1189,6 @@ def main_alpha_beta():
             kr = 0.05
 
         near = (np.abs(k_scan - k0) <= kr) & (np.abs(k_scan - k0) > 1e-10)
-        kn = k_scan[near] - k0
 
         # 排序后的切片自旋数据
         sx_up_s = sx_up[idx_slice][order]
@@ -1206,63 +1205,47 @@ def main_alpha_beta():
                 print(f"  {k_scan[i]:>10.4f}  {sx_up_s[i]:>10.4f}  "
                       f"{sy_up_s[i]:>10.4f}  {r_str:>12}")
 
-        # 对上下带分别做斜率拟合, 取 R² 更高者
+        # Gamma 点做比: 取 k0 最近邻且 Sx, Sy 可靠的点
         best_ratio = None
-        best_r2 = -1
-        for label, sx_s, sy_s in [
-            (f"Band {up}", sx_up_s, sy_up_s),
-            (f"Band {lo}", sx_lo_s, sy_lo_s),
-        ]:
-            if np.sum(near) < 3:
-                continue
-            p_x = np.polyfit(kn, sx_s[near], 1)
-            p_y = np.polyfit(kn, sy_s[near], 1)
-            sx_fit = np.polyval(p_x, kn)
-            sy_fit = np.polyval(p_y, kn)
-            r2_x = 1 - np.sum((sx_s[near] - sx_fit)**2) / max(np.sum((sx_s[near] - np.mean(sx_s[near]))**2), 1e-30)
-            r2_y = 1 - np.sum((sy_s[near] - sy_fit)**2) / max(np.sum((sy_s[near] - np.mean(sy_s[near]))**2), 1e-30)
-            r2_avg = (r2_x + r2_y) / 2
-            if abs(p_y[0]) > 1e-10:
-                r = p_x[0] / p_y[0]
-                print(f"\n  {label}:  ⟨σ_x⟩ slope = {p_x[0]:.4f},  ⟨σ_y⟩ slope = {p_y[0]:.4f}")
-                print(f"           α/β = {r:.4f}  (R²_x={r2_x:.3f}, R²_y={r2_y:.3f})")
-                if r2_avg > best_r2:
-                    best_r2 = r2_avg
-                    best_ratio = r
+        dk = np.abs(k_scan - k0)
+        for sx_s, sy_s, lbl in [(sx_up_s, sy_up_s, f"Band {up}"),
+                                 (sx_lo_s, sy_lo_s, f"Band {lo}")]:
+            order_k = np.argsort(dk)
+            for idx in order_k:
+                if dk[idx] < 1e-10 or not near[idx]:
+                    continue
+                if abs(sx_s[idx]) > 1e-3 and abs(sy_s[idx]) > 1e-3:
+                    r = sx_s[idx] / sy_s[idx]
+                    print(f"\n  {lbl}: k-k0={dk[idx]:+.4f}, "
+                          f"Sx={sx_s[idx]:+.4f}, Sy={sy_s[idx]:+.4f}, "
+                          f"alpha/beta = {r:.4f}")
+                    if best_ratio is None or abs(r) > abs(best_ratio):
+                        best_ratio = r
+                    break
 
         if best_ratio is not None:
             ratio = best_ratio
-            print(f"\n  → α/β = {ratio:.4f}  (取最优拟合)")
+            print(f"\n  -> alpha/beta = {ratio:.4f}")
 
-            # 绘图: ⟨σ_x⟩ & ⟨σ_y⟩ vs k + 线性拟合
+            # Plot: <sigma_x> & <sigma_y> vs k (scatter only)
             if _HAS_MPL:
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                for label, sx_s, sy_s, color in [
-                    (f"Band {up}", sx_up_s, sy_up_s, '#E24A33'),
-                    (f"Band {lo}", sx_lo_s, sy_lo_s, '#348ABD'),
-                ]:
-                    p_x = np.polyfit(kn, sx_s[near], 1)
-                    p_y = np.polyfit(kn, sy_s[near], 1)
-                    k_fit_line = np.linspace(min(kn), max(kn), 100)
-                    ax1.plot(k_scan[near], sx_s[near], 'o', ms=6, color=color, label=f'{label} data')
-                    ax1.plot(k0 + k_fit_line, np.polyval(p_x, k_fit_line), '-',
-                             color=color, alpha=0.6, label=f'{label} fit')
-                    ax2.plot(k_scan[near], sy_s[near], 'o', ms=6, color=color, label=f'{label} data')
-                    ax2.plot(k0 + k_fit_line, np.polyval(p_y, k_fit_line), '-',
-                             color=color, alpha=0.6, label=f'{label} fit')
+                ax1.plot(k_scan[near], sx_up_s[near], 'o', ms=6, color='#E24A33', label=f'Band {up}')
+                ax1.plot(k_scan[near], sx_lo_s[near], 's', ms=6, color='#348ABD', label=f'Band {lo}')
                 ax1.axhline(0, color='gray', ls='--', alpha=0.3)
-                ax1.set_xlabel('k (Å⁻¹)'); ax1.set_ylabel(r'$\langle\sigma_x\rangle$')
-                ax1.legend(fontsize=8); ax1.set_title(r'$\langle\sigma_x\rangle$ vs k')
+                ax1.set_xlabel('k (Ang^-1)'); ax1.set_ylabel(r'<sigma_x>')
+                ax1.legend(fontsize=8); ax1.set_title('<sigma_x> vs k')
                 ax1.grid(alpha=0.3)
+                ax2.plot(k_scan[near], sy_up_s[near], 'o', ms=6, color='#E24A33', label=f'Band {up}')
+                ax2.plot(k_scan[near], sy_lo_s[near], 's', ms=6, color='#348ABD', label=f'Band {lo}')
                 ax2.axhline(0, color='gray', ls='--', alpha=0.3)
-                ax2.set_xlabel('k (Å⁻¹)'); ax2.set_ylabel(r'$\langle\sigma_y\rangle$')
-                ax2.legend(fontsize=8); ax2.set_title(r'$\langle\sigma_y\rangle$ vs k')
+                ax2.set_xlabel('k (Ang^-1)'); ax2.set_ylabel(r'<sigma_y>')
+                ax2.legend(fontsize=8); ax2.set_title('<sigma_y> vs k')
                 ax2.grid(alpha=0.3)
                 plt.tight_layout()
                 plt.savefig(os.path.join(OUTPUT_DIR, 'soc_spin_fit.png'), dpi=200, bbox_inches='tight')
                 plt.close()
                 print(f"  [Plot -> {OUTPUT_DIR}/soc_spin_fit.png]")
-
     # ---- Part 3: Combine ----
     print()
     print("=" * 65)
