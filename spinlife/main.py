@@ -595,6 +595,197 @@ def _input_E1_data(label):
     return (np.array(s), np.array(e)) if len(s) >= 3 else (None, None)
 
 
+def _input_mobility_table():
+    """一次粘贴整张迁移率数据表.
+
+    格式:
+          -0.03  -0.02  -0.01  0  0.01  0.02  0.03
+         -277.5 -277.6 ...         (总能, C₂D 用)
+      VBM  -2.56  -2.63 ...         (VBM 能量, 可省略)
+      CBM  -2.22  -2.28 ...         (CBM 能量, 可省略)
+
+    第 1 行可带方向标记: "x  -0.03 ..." 或 "y  -0.03 ..."
+    应变值以 % 为单位 (0.03 = 3%) 或以小数 (0.0003 = 0.03%).
+
+    Returns dict {strain, energy, vbm, cbm} 或 None.
+    """
+    print("  粘贴数据表 (应变  总能  [VBM]  [CBM]), 多行, 空行结束:")
+    raw = _input_data("")
+    if not raw or len(raw) < 2:
+        return None
+
+    # 第 1 行: 应变值, 可选 "x"/"y" 前缀
+    parts = raw[0].strip().split()
+    off = 1 if parts and parts[0].lower() in ('x', 'y') else 0
+    try:
+        strain = np.array([float(v) for v in parts[off:]])
+    except ValueError:
+        return None
+    if len(strain) < 3:
+        return None
+
+    # 判断应变单位: 若 max(|strain|) > 0.2 说明是 % 单位, 转小数
+    if np.max(np.abs(strain)) > 0.2:
+        strain = strain / 100
+
+    result = {'strain': strain, 'energy': None, 'vbm': None, 'cbm': None}
+    for line in raw[1:]:
+        parts = line.strip().split()
+        if not parts:
+            continue
+        # 检查 VBM/CBM 前缀
+        label = parts[0].upper()
+        if label in ('VBM', 'CBM'):
+            try:
+                vals = np.array([float(v) for v in parts[1:]])
+                if len(vals) == len(strain):
+                    result[label.lower()] = vals
+            except ValueError:
+                pass
+            continue
+        # 纯数字行 → 总能
+        try:
+            vals = np.array([float(v) for v in parts])
+            if len(vals) == len(strain) and result['energy'] is None:
+                result['energy'] = vals
+        except ValueError:
+            pass
+
+    if result['energy'] is not None:
+        return result
+    return None
+
+
+# ---- 迁移率自动扫描 (OUTCAR/EIGENVAL) ----
+
+def _read_outcar_energy(path):
+    """从 OUTCAR 提取总能 'energy without entropy' (eV)."""
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                if 'energy without entropy' in line or 'energy  without entropy' in line:
+                    idx = line.find('=')
+                    if idx >= 0:
+                        after = line[idx+1:].strip().split()
+                        if after:
+                            return float(after[0])
+    except Exception:
+        pass
+    return None
+
+
+def _read_eigenval_band_edge(path, mode='vbm'):
+    """从 EIGENVAL 读 Gamma 点 VBM/CBM 能量 (eV). 适用于 SOC/非SOC."""
+    try:
+        with open(path, 'r') as f:
+            lines = f.readlines()
+        meta = lines[5].strip().split()
+        nbands = int(meta[0])
+        nkpts = int(meta[1])
+        i = 7
+        vbm, cbm = -1e10, 1e10
+        for _ in range(nkpts):
+            while i < len(lines) and lines[i].strip() == '':
+                i += 1
+            if i >= len(lines):
+                break
+            i += 1  # k-point index
+            if i >= len(lines):
+                break
+            kxyz = lines[i].strip().split()[:3]
+            i += 1
+            is_gamma = all(abs(float(c)) < 1e-6 for c in kxyz)
+            for b in range(nbands):
+                if i >= len(lines):
+                    break
+                parts = lines[i].strip().split()
+                i += 1
+                if len(parts) >= 3 and is_gamma:
+                    en, occ = float(parts[1]), float(parts[2])
+                    if occ > 0.5 and en > vbm:
+                        vbm = en
+                    if occ < 0.5 and en < cbm:
+                        cbm = en
+            if is_gamma:
+                break
+        if mode == 'vbm':
+            return vbm if vbm > -1e9 else None
+        return cbm if cbm < 1e9 else None
+    except Exception:
+        return None
+
+
+def _extract_strain_from_filename(name):
+    """从文件名提取应变值.
+
+    支持模式:
+      m0.02/p0.01, -0.02/+0.01, _0.99 (lattice factor → strain)
+    """
+    import re
+    base = os.path.basename(name)
+    # Pattern 1: m0.02 / p0.01
+    m = re.search(r'([mp])(\d+\.?\d*)', base)
+    if m:
+        val = float(m.group(2))
+        if m.group(1) == 'm':
+            val = -val
+        return val
+    # Pattern 2: +0.01 / -0.02
+    m = re.search(r'([+-])(\d+\.?\d*)', base)
+    if m:
+        val = float(m.group(1) + m.group(2))
+        if abs(val) < 5:  # explicit strain
+            return val
+        if 0.8 <= val <= 1.2:  # lattice factor
+            return val - 1.0
+        return val
+    # Pattern 3: bare number (e.g. _0.02, _0.99)
+    m = re.search(r'_(\d+\.?\d*)', base)
+    if m:
+        val = float(m.group(1))
+        if 0.8 <= val <= 1.2:
+            return val - 1.0
+        if val > 0.2:
+            return val / 100
+        return val
+    return None
+
+
+def _auto_scan_mobility(label):
+    """自动扫描 OUTCAR* 文件, 提取应变+总能, 尝试读 EIGENVAL 做 E₁."""
+    import glob
+    patterns = [
+        f'OUTCAR*{label}*', f'OUTCAR*{label.upper()}*',
+        f'*{label}*OUTCAR*', f'*{label.upper()}*OUTCAR*',
+    ]
+    files = set()
+    for pat in patterns:
+        for f in glob.glob(pat):
+            files.add(f)
+    if not files:
+        return None
+
+    strain_data, e1_data = [], []
+    for f in sorted(files):
+        s = _extract_strain_from_filename(f)
+        if s is None:
+            continue
+        e = _read_outcar_energy(f)
+        if e is not None:
+            strain_data.append((s, e))
+        # EIGENVAL for E₁
+        ep = f.replace('OUTCAR', 'EIGENVAL')
+        if not os.path.exists(ep):
+            ep = os.path.join(os.path.dirname(f), 'EIGENVAL')
+        if os.path.exists(ep):
+            vbm = _read_eigenval_band_edge(ep, 'vbm')
+            if vbm is not None:
+                e1_data.append((s, vbm))
+    if len(strain_data) < 3:
+        return None
+    return {'strain_data': strain_data, 'e1_data': e1_data}
+
+
 def main_mobility():
     """交互式载流子迁移率计算 (x + y 双方向)"""
     print("=" * 65)
@@ -626,13 +817,50 @@ def main_mobility():
         print(f"  [{dir_label.upper()}] 方向")
         print("=" * 65)
 
-        # --- C2D ---
-        print()
-        print("  C2D — 应变 vs 总能量:")
-        strain, energy = _input_strain_data()
+        # --- 自动扫描 OUTCAR ---
+        auto = _auto_scan_mobility(dir_label)
+        strain, energy = None, None
+        s_vbm_data, e_vbm_data = None, None
+        s_cbm_data, e_cbm_data = None, None
+
+        if auto:
+            print(f"\n  检测到 OUTCAR 文件 ({dir_label.upper()}), 共 {len(auto['strain_data'])} 个应力点:")
+            for s, e in auto['strain_data']:
+                print(f"    ε = {s*100:+.2f}%  →  E = {e:.6f} eV")
+            if auto['e1_data']:
+                print(f"  EIGENVAL (E₁): {len(auto['e1_data'])} 个点")
+                for s, v in auto['e1_data']:
+                    print(f"    ε = {s*100:+.2f}%  →  VBM = {v:.6f} eV")
+            if input("\n  -->> 自动使用以上数据？(Y/n): ").strip().lower() != 'n':
+                sd = np.array(auto['strain_data'])
+                strain = sd[:, 0]
+                energy = sd[:, 1]
+                if auto['e1_data']:
+                    e1d = np.array(auto['e1_data'])
+                    s_vbm_data = e1d[:, 0]
+                    e_vbm_data = e1d[:, 1]
+
         if strain is None:
-            print("  [数据不足, 跳过]")
-            continue
+            # --- 手动输入: 先试表格, 再逐行 ---
+            table = _input_mobility_table()
+            if table is not None:
+                strain, energy = table['strain'], table['energy']
+                if table.get('vbm') is not None:
+                    s_vbm_data, e_vbm_data = table['strain'], table['vbm']
+                if table.get('cbm') is not None:
+                    s_cbm_data, e_cbm_data = table['strain'], table['cbm']
+                print(f"  [表格: {len(strain)} 个应力点, 总能+C₂D"
+                      f"{' +VBM' if table.get('vbm') is not None else ''}"
+                      f"{' +CBM' if table.get('cbm') is not None else ''}]")
+
+            if strain is None:
+                # --- C2D 逐行输入 ---
+                print()
+                print("  C2D — 应变 vs 总能量 (逐行):")
+                strain, energy = _input_strain_data()
+                if strain is None:
+                    print("  [数据不足, 跳过]")
+                    continue
 
         d2E, r2_e, coeffs = fit_C2D(strain, energy)
         A2, A1, A0_fit = coeffs
@@ -655,22 +883,33 @@ def main_mobility():
 
         # --- E1 ---
         E1_vbm, E1_cbm = None, None
-        s_vbm_data, e_vbm_data = None, None
-        s_cbm_data, e_cbm_data = None, None
-        try:
-            if input("\n  -->> 输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
-                s_vbm_data, e_vbm_data = _input_E1_data(f"VBM ({dir_label})")
-                if s_vbm_data is not None:
-                    E1_vbm, vbm_r2, vc = fit_E1(s_vbm_data, e_vbm_data)
-                    print(f"  E1 (VBM) = {E1_vbm:.4f} eV,  R^2 = {vbm_r2:.6f}")
+        if s_vbm_data is not None and e_vbm_data is not None:
+            E1_vbm, vbm_r2, vc = fit_E1(s_vbm_data, e_vbm_data)
+            src = "自动" if auto else "表格"
+            print(f"  E1 (VBM) = {E1_vbm:.4f} eV,  R^2 = {vbm_r2:.6f}  [{src}]")
+        else:
+            try:
+                if input("\n  -->> 输入 VBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+                    s_vbm_data, e_vbm_data = _input_E1_data(f"VBM ({dir_label})")
+                    if s_vbm_data is not None:
+                        E1_vbm, vbm_r2, vc = fit_E1(s_vbm_data, e_vbm_data)
+                        print(f"  E1 (VBM) = {E1_vbm:.4f} eV,  R^2 = {vbm_r2:.6f}")
+            except (EOFError, KeyboardInterrupt):
+                pass
 
-            if input("\n  -->> 输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
-                s_cbm_data, e_cbm_data = _input_E1_data(f"CBM ({dir_label})")
-                if s_cbm_data is not None:
-                    E1_cbm, cbm_r2, cc = fit_E1(s_cbm_data, e_cbm_data)
-                    print(f"  E1 (CBM) = {E1_cbm:.4f} eV,  R^2 = {cbm_r2:.6f}")
-        except (EOFError, KeyboardInterrupt):
-            pass
+        if s_cbm_data is not None and e_cbm_data is not None:
+            E1_cbm, cbm_r2, cc = fit_E1(s_cbm_data, e_cbm_data)
+            src = "自动" if auto else "表格"
+            print(f"  E1 (CBM) = {E1_cbm:.4f} eV,  R^2 = {cbm_r2:.6f}  [{src}]")
+        else:
+            try:
+                if input("\n  -->> 输入 CBM 形变势数据？(y/n, 默认n): ").strip().lower() == 'y':
+                    s_cbm_data, e_cbm_data = _input_E1_data(f"CBM ({dir_label})")
+                    if s_cbm_data is not None:
+                        E1_cbm, cbm_r2, cc = fit_E1(s_cbm_data, e_cbm_data)
+                        print(f"  E1 (CBM) = {E1_cbm:.4f} eV,  R^2 = {cbm_r2:.6f}")
+            except (EOFError, KeyboardInterrupt):
+                pass
 
         # --- 有效质量 (各向异性) ---
         m_vbm, m_cbm = None, None
