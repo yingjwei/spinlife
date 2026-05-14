@@ -1167,8 +1167,9 @@ def main_alpha_beta():
     ratio = None
     procar_path = _prompt_path("PROCAR 路径", default_names=['PROCAR'], allow_skip=True)
     if procar_path and os.path.exists(procar_path):
-        print("\n  [2/2] α/β 比值 — PROCAR 自旋织构斜率拟合")
-        print("  方法: ⟨σ_x⟩ = A·k,  ⟨σ_y⟩ = B·k  →  α/β = A/B")
+        print("
+  [2/2] α/β 比值 — PROCAR 自旋织构 (Gamma 点直接做比)")
+        print("  方法: ⟨σ_x⟩/⟨σ_y⟩ → α/β (取 Γ 最近邻可靠 k 点直接做比)")
         print()
         procar = PROCAR(procar_path)
         kpts = procar.get_kpoints_cart()
