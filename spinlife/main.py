@@ -549,6 +549,24 @@ def _procar_cli_flow():
     print("=" * 65)
 
 
+def _input_data(prompt=""):
+    """读取多行输入, 空行结束, 返回行列表"""
+    lines = []
+    while True:
+        try:
+            raw = input(prompt if not lines else "")
+        except (EOFError, KeyboardInterrupt):
+            break
+        line = _clean_input(raw)
+        if not line and lines:
+            break
+        if line:
+            lines.append(line)
+        if not lines:
+            continue
+    return lines
+
+
 def _input_strain_data():
     """通用: 输入应变-能量数据, 返回 (strain_array, energy_array) 或 (None, None)"""
     print("  输入 应变(%)  能量(eV), 一行一个, 空行结束")
@@ -1092,9 +1110,12 @@ def main_alpha_beta():
         E_up = energies[:, up]
         E_lo = energies[:, lo]
 
-        # k0 at minimum SOC splitting
+        # k0 at minimum SOC splitting (for ΔE² fit)
         dE = np.abs(E_up - E_lo)
         k0 = k[np.argmin(dE)]
+
+        # k0 at band edge (VBM/CBM) for m* fit (独立于 SOC k0)
+        k0_m = k[np.argmax(E_up)]
 
         # Auto-scan dk — independently optimize Δk for ΔE² fit and m* fit
         print()
@@ -1105,7 +1126,7 @@ def main_alpha_beta():
         scan_m = []     # (dk, m_star, r2, npts)
         for dk_try in np.arange(0.003, 0.151, 0.002):
             ab_norm_try, Delta_try, r2_dE2 = fit_alpha_beta(k, E_up, E_lo, k0, dk_try)
-            ms_try, r2_m, npts = fit_effmass(k, E_up, k0, dk_try)
+            ms_try, r2_m, npts = fit_effmass(k, E_up, k0_m, dk_try)
             ms_str = f"{ms_try:.2f}" if ms_try else "-"
             print(f"  {dk_try:>8.3f}  {npts:>5d}  {r2_dE2:>8.4f}  {ms_str:>7s}  {r2_m:>8.4f}")
             if ab_norm_try is not None:
@@ -1113,19 +1134,19 @@ def main_alpha_beta():
             if ms_try:
                 scan_m.append((dk_try, ms_try, r2_m, npts))
 
-        # Best dk for ΔE² fit → √(α²+β²)
+        # Best dk for ΔE² fit at SOC k0 → √(α²+β²)
         if scan_dE2:
             best_dE2 = max(scan_dE2, key=lambda x: x[3])
             kr_ab, ab_norm, Delta, r2_dE2 = best_dE2
-            print(f"\n  >> √(α²+β²): Δk = {kr_ab:.3f} 1/A  (R²_ΔE² = {r2_dE2:.4f})")
+            print(f"\n  >> √(α²+β²): Δk = {kr_ab:.3f} 1/A  (R²_ΔE² = {r2_dE2:.4f}) at k₀ = {k0:.4f}")
         else:
             kr_ab, ab_norm, Delta, r2_dE2 = 0.05, None, None, 0
 
-        # Best dk for parabola fit → m* (independent selection)
+        # Best dk for parabola fit at band edge k0_m → m* (independent)
         if scan_m:
             best_m = max(scan_m, key=lambda x: x[2])
             kr_m, m_star, r2_m, n_pts_m = best_m
-            print(f"  >> m*:          Δk = {kr_m:.3f} 1/A  (R²_m = {r2_m:.4f})")
+            print(f"  >> m*:          Δk = {kr_m:.3f} 1/A  (R²_m = {r2_m:.4f}) at k₀ = {k0_m:.4f}")
         else:
             kr_m, m_star, r2_m, n_pts_m = 0.05, None, 0, 0
 
@@ -1205,13 +1226,13 @@ def main_alpha_beta():
             print(f"  {k_scan[i]:>10.4f}  {sx_up_s[i]:>10.4f}  "
                   f"{sy_up_s[i]:>10.4f}  {r_str:>12}")
 
-        # Gamma 点直接做比: 在全部 k 点中找离 Γ 最近的可信点
+        # Gamma 点直接做比: 取 Γ 点 (k=0) 或最近非 Γ 可靠点
         best_ratio = None
         best_i = None
         dist = np.abs(k_scan)
         order_by_dist = np.argsort(dist)
         for i in order_by_dist:
-            if dist[i] > 1e-10 and abs(sx_up_s[i]) > 1e-3 and abs(sy_up_s[i]) > 1e-3:
+            if abs(sx_up_s[i]) > 1e-3 and abs(sy_up_s[i]) > 1e-3:
                 best_ratio = sx_up_s[i] / sy_up_s[i]
                 best_i = i
                 break
