@@ -129,8 +129,8 @@ E_avg = (E_upper + E_lower) / 2 = E0 + A(k-k0)^2
 
 <p>PROCAR 自旋期望值在面外 PST 体系中噪声较大. 程序自动评估拟合质量:</p>
 <ul>
-  <li>R^2 >= 0.5: 认为比值可靠, 用于 alpha/beta 分离和 L_PSH 计算</li>
-  <li>R^2 < 0.5: 自动跳过, 仅报告诊断信息, 自旋寿命使用 sqrt(alpha^2+beta^2) 估算</li>
+  <li>alpha/beta 比值稳定 (|ratio| > 1e-6): 用于 alpha/beta 分离和 L_PSH 计算</li>
+  <li>比值不稳定: 自动跳过, 但 tau_s 仍可通过 sqrt(alpha^2+beta^2) 估算</li>
 </ul>
 
 <h3>2.4 自旋寿命 tau_s (DP 机制)</h3>
@@ -138,7 +138,7 @@ E_avg = (E_upper + E_lower) / 2 = E0 + A(k-k0)^2
 <pre>
 tau_s = hbar^2 / (2 * m* * m0 * (alpha^2+beta^2) * tau_p)
 
-L_PSH = 2.39 / (m* * |alpha|)     (um, 需 alpha/beta 分离可靠)
+L_PSH = 2.39 / (m* * |alpha|)     (um, 需 PROCAR 自旋织构比值稳定)
 </pre>
 
 <p>tau_s 由选项 2 + 3 的结果计算: m* 来自带平均抛物线拟合, (alpha^2+beta^2) 来自带差线性拟合. L_PSH 需要 alpha/beta 比值 (来自 PROCAR 拟合, R^2>=0.5). tau_p 可直接输入, 或用 mu 反算 (tau_p = mu * m* / e).</p>

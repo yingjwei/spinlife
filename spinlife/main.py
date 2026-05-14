@@ -1068,13 +1068,13 @@ def main_effmass_wannier():
 
 
 def main_alpha_beta():
-    """SOC α/β: Wannier ΔE² 拟合 → √(α²+β²), PROCAR 自旋 → α/β 比值"""
+    """SOC α/β: band-averaging → √(α²+β²) + m*, PROCAR spin → α/β ratio"""
     print()
     print("=" * 65)
     print("  SOC 参数 α/β 计算")
     print("=" * 65)
     print()
-    print("  方法: Wannier 密能带拟合 → √(α²+β²)")
+    print("  方法: Wannier SOC 双带 → 能带平均法 → m* + √(α²+β²)")
     print("        PROCAR 自旋织构斜率拟合 → α/β 比值")
     print()
 
