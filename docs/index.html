@@ -185,7 +185,7 @@ m* = 4.3210 m0  (R^2 = 0.9998)
 [1/1] Wannier SOC 能带 -> sqrt(alpha^2+beta^2) + m* (能带平均法)
   -->  输入 wannier90_band.dat
   -->  选择 SOC 带对上/下能带
-  -->  拟合范围 +/- Delta k
+  -->  自动扫描最优拟合范围
 
 sqrt(alpha^2+beta^2) = 14.13 meV.A
 m*                   = 4.32 m0
@@ -193,7 +193,7 @@ m*                   = 4.32 m0
 [可选] PROCAR -> alpha/beta 比值诊断
   -->  输入 PROCAR 路径
   -->  指定 SOC 带对
-  -->  自动判定 R^2 质量阈值
+  -->  自动取 Gamma 点最近邻可靠 Sx/Sy -> alpha/beta
 </pre>
 
 <h3>3.4 快捷命令行 (向后兼容)</h3>
