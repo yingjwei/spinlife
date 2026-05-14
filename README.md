@@ -57,39 +57,77 @@ pip install git+https://github.com/yingjwei/spinlife.git
 
 ### 1. 载流子迁移率
 
-2D 形变势理论: μ = 2eℏ³C₂D / (3kBT|m*|²E₁²)
+2D 形变势理论:
+
+$$
+C_{\rm 2D} = \frac{1}{A_0}\frac{\partial^2 E}{\partial\varepsilon^2}
+\qquad
+E_1 = \frac{dE_{\rm VBM}}{d\varepsilon}
+$$
+
+$$
+\mu = \frac{2e\hbar^3 C_{\rm 2D}}{3k_B T\;|m^*|^2\;E_1^2}
+\qquad
+\tau_p = \frac{\mu\;m^*}{e}
+$$
 
 一次运行收集 X + Y 双方向数据:
 - C₂D: 应变-总能量二次拟合
 - E₁: 形变势线性拟合
 - 各向异性 m*: x/y 分开输入 (若之前已通过 Wannier 算过 m*, 会显示参考值)
-- 输出 μ 和 τ_p (自动存入会话上下文)
+- 输出 μ 和 τ<sub>p</sub> (自动存入会话上下文)
 
 ### 2. 有效质量 (Wannier)
 
 读 `wannier90_band.dat`, 沿高对称路径抛物线拟合:
 
-```
-E(k) = E₀ + A(k-k₀)²
-m*/m₀ = 3.81 / |A|
-```
+$$
+E(k) = E_0 + A\,(k - k_0)^2
+\qquad\Longrightarrow\qquad
+\frac{m^*}{m_0} = \frac{3.81}{|A|}
+$$
 
-需提供晶格常数 a (Å) 将 k 转换为 Å⁻¹。
+需提供晶格常数 $a$ (Å) 将 $k$ 转换为 Å⁻¹。
 结果自动保存至会话上下文, 供选项 4 使用。
 
 ### 3. SOC 参数 α/β
 
 **√(α²+β²)**: Wannier 密能带 → ΔE² vs k² 拟合 (自动扫描最优 Δk, 独立选择)
-**α/β 比值**: PROCAR Γ 点直接做比 — 找离 Γ 最近的可信 k 点 (|Sx|,|Sy|>1e-3), ⟨σ_x⟩/⟨σ_y⟩ = α/β
+
+$$
+\Delta E^2 = 4\Delta^2 + 4(\alpha^2+\beta^2)\,k^2
+\qquad\Longrightarrow\qquad
+\sqrt{\alpha^2+\beta^2} = \frac{\sqrt{\text{slope}}}{2}
+$$
+
+**α/β 比值**: PROCAR Γ 点直接做比 — 找离 Γ 最近的可信 k 点 $(|S_x|,|S_y|>10^{-3})$, $\langle\sigma_x\rangle/\langle\sigma_y\rangle = \alpha/\beta$
 
 **有效质量 m***: 单能带抛物线拟合 `fit_effmass()` 自动计算, **与 √(α²+β²) 各自独立扫描最优 Δk**, 与选项 2 统一.
 
-⇒ 分离 α, β, 自动存入会话上下文。
+$$
+\frac{m^*}{m_0} = \frac{3.81}{|A|}
+$$
+
+⟹ 分离 α, β, 自动存入会话上下文。
 
 ### 4. 自旋寿命 (DP 机制 — 结果整合)
 
-自动装载会话上下文中的 m*, α, β, τ_p; 缺失项才要求手工输入.
-τ_p 可直接输入, 或通过 μ 反算 (τ_p = μ·m*/e).
+自动装载会话上下文中的 m*, α, β, τ<sub>p</sub>; 缺失项才要求手工输入.
+τ<sub>p</sub> 可直接输入, 或通过 μ 反算 ($\tau_p = \mu \cdot m^* / e$).
+
+$$
+\alpha_{\rm eff} = |\alpha - \beta|
+\qquad\text{(SU(2) 对称性破缺项)}
+$$
+
+$$
+\tau_s = \frac{\hbar^2}{2\;m^*\;m_0\;\alpha_{\rm eff}^2\;\tau_p}
+$$
+
+$$
+L_{\rm PSH} = \frac{\pi\hbar^2}{m^*\;m_0\;|\alpha|}
+\approx \frac{2.39}{m^*\;|\alpha|_{\rm meV\cdot\AA}}\;(\mu{\rm m})
+$$
 
 ### 5. PROCAR 传统模式
 

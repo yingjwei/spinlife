@@ -17,6 +17,18 @@ td { padding: 8px 14px; border-bottom: 1px solid #ddd; }
 tr:hover { background: #f0f5ff; }
 .note { background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px 16px; margin: 15px 0; border-radius: 4px; }
 .warn { background: #f8d7da; border-left: 4px solid #dc3545; padding: 12px 16px; margin: 15px 0; border-radius: 4px; }
+
+/* Fraction display — horizontal vinculum */
+.frac { display: inline-flex; flex-direction: column; align-items: center; vertical-align: middle; margin: 0 3px; }
+.frac .num { border-bottom: 2px solid #222; padding: 0 6px 3px 6px; }
+.frac .den { padding: 3px 6px 0 6px; }
+
+/* Equation styling — Times New Roman, academic style */
+.eq { font-family: 'Times New Roman', 'STIX', 'Latin Modern Math', serif; font-size: 1.15em; line-height: 1.8; }
+.eq-block { background: #f6f8fa; border-left: 4px solid #2980b9; padding: 14px 18px; margin: 14px 0; border-radius: 4px; overflow-x: auto; }
+.eq-block .eq { margin: 6px 0; }
+.eq-desc { font-size: 0.93em; color: #444; margin: 4px 0 4px 0; font-family: 'Segoe UI', Arial, sans-serif; }
+.eq-symbol { font-family: 'Times New Roman', serif; }
 </style>
 </head>
 <body>
@@ -56,7 +68,7 @@ tr:hover { background: #f0f5ff; }
   0)  退出
 </pre>
 
-<p><b>选项 1:</b> 应变-总能量 → C₂D, E₁, μ, τ_p (x + y 双方向, 各向异性 m*)</p>
+<p><b>选项 1:</b> 应变-总能量 → C₂D, E₁, μ, τ<sub>p</sub> (x + y 双方向, 各向异性 m*)</p>
 <p><b>选项 2:</b> 读 <code>wannier90_band.dat</code> → 抛物线拟合 → m* (密 k 网格, 可靠)</p>
 <p><b>选项 3:</b> Wannier 自动扫描 Δk: ΔE² vs k² 独立选最优 → √(α²+β²); 抛物线独立选最优 → m* (与选项 2 统一); PROCAR Γ 点直接做比 → α/β 比值</p>
 <p><b>选项 4:</b> 整合前三步结果, 自动装载已知的 m*, α, β, τ<sub>p</sub> → τ<sub>s</sub>, L<sub>PSH</sub></p>
@@ -70,12 +82,20 @@ tr:hover { background: #f0f5ff; }
 
 <p><b>数据来源:</b> Wannier90 能带 (<code>wannier90_band.dat</code>, 密 k 网格)</p>
 
-<pre>
-E(k) = E₀ + A(k-k₀)²
+<p>在能带极值 (VBM / CBM) 附近做抛物线拟合:</p>
 
-对 (k-k₀)² vs E 线性回归 → 斜率 A
-m*/m₀ = 3.81 / |A|        (3.81 = ℏ²/2m₀ in eV·Å²)
-</pre>
+<div class="eq-block">
+  <div class="eq">E(k) = E₀ + A (k − k₀)²</div>
+  <div class="eq-desc">对 (k − k₀)² 与 E 做线性回归 → 斜率 A</div>
+  <div class="eq">
+    m* / m₀ =
+    <span class="frac">
+      <span class="num">3.81</span>
+      <span class="den">|A|</span>
+    </span>
+  </div>
+  <div class="eq-desc">其中 3.81 = ℏ²/(2m₀), 单位 eV·Å²</div>
+</div>
 
 <p>需提供晶格常数 a (Å) 将 Wannier90 分数坐标 k 转换为 Å⁻¹.</p>
 
@@ -83,17 +103,17 @@ m*/m₀ = 3.81 / |A|        (3.81 = ℏ²/2m₀ in eV·Å²)
 
 <p><b>数据来源:</b> Wannier90 SOC 双带 (含自旋-轨道耦合)</p>
 
-<pre>
-ΔE = |E_upper - E_lower|
-ΔE² = 4Δ² + 4(α²+β²)k²
+<p>Rashba 模型下, SOC 劈裂能 ΔE 与波矢 k 的关系:</p>
 
-对 k² vs ΔE² 线性回归:
-  slope = 4(α²+β²)
-  intercept = 4Δ²
-
-√(α²+β²) = √(slope) / 2       (eV·Å)
-Δ = √(intercept) / 2           (eV)
-</pre>
+<div class="eq-block">
+  <div class="eq">ΔE = |E<sub>upper</sub> − E<sub>lower</sub>|</div>
+  <div class="eq">ΔE² = 4Δ² + 4(α² + β²) k²</div>
+  <div class="eq-desc">对 k² 与 ΔE² 做线性回归:</div>
+  <div class="eq" style="margin-left:1.5em;">斜率 &nbsp; = 4 (α² + β²)</div>
+  <div class="eq" style="margin-left:1.5em;">截距 &nbsp; = 4Δ²</div>
+  <div class="eq" style="margin-top:8px;">√(α² + β²) = √(斜率) / 2 &nbsp;&nbsp; (eV·Å)</div>
+  <div class="eq">Δ = √(截距) / 2 &nbsp;&nbsp; (eV)</div>
+</div>
 
 <p>同时自动扫描有效质量 m*: Wannier 密 k 网格对 <b>E<sub>up</sub></b> 做抛物线拟合, 与 √(α²+β²) 各自独立扫描最优 Δk, 与选项 2 统一.</p>
 
@@ -103,40 +123,82 @@ m*/m₀ = 3.81 / |A|        (3.81 = ℏ²/2m₀ in eV·Å²)
 
 <p><b>数据来源:</b> VASP LSORBIT PROCAR (Γ 附近自旋分量)</p>
 
-<p>从 k·p 模型, 在一阶近似下 ⟨σ_x⟩/⟨σ_y⟩ = α/β, 与 k 无关. 在 Γ-X 方向切片中, 找离 Γ 最近且自旋信号可靠 (|Sx|,|Sy|>1e-3) 的 k 点:</p>
+<p>从 k·p 模型, 在一阶近似下:</p>
 
-<pre>
-α/β = ⟨σ_x⟩ / ⟨σ_y⟩
-
-自动排除 Γ 点 (SOC 劈裂 Δ→0, 自旋发散),
-无需拟合范围, 无需手工选择.
-</pre>
+<div class="eq-block">
+  <div class="eq">⟨σ<sub>x</sub>⟩ / ⟨σ<sub>y</sub>⟩ = α / β</div>
+  <div class="eq-desc">比值与 k 无关 (k·p 一阶近似). 在 Γ−X 方向切片中, 找离 Γ 最近且自旋信号可靠 (|S<sub>x</sub>|, |S<sub>y</sub>| &gt; 10⁻³) 的 k 点:</div>
+</div>
 
 <p>此法无需拟合范围, 只需 1 个可靠 k 点即可得到 α/β.</p>
 
-<h3>2.4 自旋寿命 τ_s (DP 机制)</h3>
+<p><b>自动排除 Γ 点</b> (SOC 劈裂 Δ → 0, 自旋发散), 无需拟合范围, 无需手工选择.</p>
 
-<pre>
-α_eff = |α - β|                    (SU(2) 对称性破缺项)
-τ_s = ℏ² / (2 · m* · m₀ · α_eff² · τ_p)
+<h3>2.4 自旋寿命 τ<sub>s</sub> (DP 机制)</h3>
 
-L_PSH = πℏ² / (m* · m₀ · |α|)
-      ≈ 2.39 / (m* · |α|_meVA)     (μm)
-</pre>
+<p>D'yakonov–Perel (DP) 机制下, 自旋寿命由 α 和 β 的 SU(2) 对称性破缺决定:</p>
 
-<p>τ_s 由选项 2 和 3 的结果输入计算. τ_p 可直接输入, 或用 μ 反算 (τ_p = μ · m* / e).</p>
+<div class="eq-block">
+  <div class="eq">α<sub>eff</sub> = |α − β|</div>
+  <div class="eq-desc">SU(2) 对称性破缺项 — 决定自旋退相位速率</div>
+</div>
+
+<div class="eq-block">
+  <div class="eq" style="font-size:1.2em;">
+    τ<sub>s</sub> =
+    <span class="frac">
+      <span class="num">ℏ²</span>
+      <span class="den">2 · m* · m₀ · α<sub>eff</sub>² · τ<sub>p</sub></span>
+    </span>
+  </div>
+</div>
+
+<p>PSH (Persistent Spin Helix) 周期:</p>
+
+<div class="eq-block">
+  <div class="eq">L<sub>PSH</sub> =
+    <span class="frac">
+      <span class="num">πℏ²</span>
+      <span class="den">m* · m₀ · |α|</span>
+    </span>
+  </div>
+  <div class="eq" style="color:#555;">&asymp; 2.39 / (m* · |α|<sub>meV·Å</sub>) &nbsp;&nbsp; (单位 μm)</div>
+</div>
+
+<p>τ<sub>s</sub> 由选项 2 和 3 的结果输入计算. τ<sub>p</sub> 可直接输入, 或用 μ 反算:</p>
+
+<div class="eq-block">
+  <div class="eq">τ<sub>p</sub> = μ · m* / e</div>
+</div>
 
 <h3>2.5 载流子迁移率 μ</h3>
 
 <p><b>数据来源:</b> VASP 应变计算 (relax OUTCAR 总能量 + SOC OUTCAR 能带边缘)</p>
 
-<pre>
-C₂D = (1/A₀) × ∂²E/∂ε²             (弹性模量, J/m²)
-E₁  = dE_VBM/dε 或 dE_CBM/dε        (形变势, eV)
+<p>基于二维形变势理论:</p>
 
-μ = 2eℏ³C₂D / (3k_B T |m*|² E₁²)   (cm²/V·s)
-τ_p = μ · m* / e                    (动量散射时间, ps)
-</pre>
+<div class="eq-block">
+  <div class="eq">C<sub>2D</sub> = (1 / A₀) × ∂²E / ∂ε²</div>
+  <div class="eq-desc">弹性模量 — 应变-总能量二次拟合 (J/m²)</div>
+  <div class="eq" style="margin-top:8px;">E₁ = dE<sub>VBM</sub> / dε &nbsp; 或 &nbsp; dE<sub>CBM</sub> / dε</div>
+  <div class="eq-desc">形变势 — 能带边缘线性拟合 (eV)</div>
+</div>
+
+<div class="eq-block">
+  <div class="eq" style="font-size:1.15em;">
+    μ =
+    <span class="frac">
+      <span class="num">2eℏ³C<sub>2D</sub></span>
+      <span class="den">3k<sub>B</sub>T |m*|² E₁²</span>
+    </span>
+  </div>
+  <div class="eq-desc">单位: cm²/V·s</div>
+</div>
+
+<div class="eq-block">
+  <div class="eq">τ<sub>p</sub> = μ · m* / e</div>
+  <div class="eq-desc">动量散射时间 (ps)</div>
+</div>
 
 <p>支持 x + y 双方向一次运行, m*<sub>x</sub> ≠ m*<sub>y</sub> 各向异性.</p>
 
@@ -209,14 +271,14 @@ python /path/to/spinlife/main.py
 <ol>
   <li><b>有效质量 (选项 2)</b> → 读 <code>wannier90_band.dat</code>, 存 m*</li>
   <li><b>SOC α/β (选项 3)</b> → Wannier + PROCAR, 存 α, β</li>
-  <li><b>迁移率 (选项 1)</b> → 应变计算, 存 μ, τ_p, T</li>
+  <li><b>迁移率 (选项 1)</b> → 应变计算, 存 μ, τ<sub>p</sub>, T</li>
   <li><b>KPOINTS (选项 6)</b> → 读 Wannier 能带, 选 SOC 带对, 生成密集 k 网格</li>
   <li><b>自旋寿命 (选项 4)</b> → 自动装载上述所有结果, 一键算出 τ<sub>s</sub>, L<sub>PSH</sub></li>
 </ol>
 
 <div class="note">
 <b>可选:</b> 也可只运行部分步骤, 选项 4 自动识别缺失项并要求手工输入.
-例如只做了 Wannier m* 和 SOC α/β, τ_p 可以在选项 4 中直接输入或通过 μ 反算.
+例如只做了 Wannier m* 和 SOC α/β, τ<sub>p</sub> 可以在选项 4 中直接输入或通过 μ 反算.
 </div>
 
 <h3>3.6 输入输出文件</h3>
@@ -225,7 +287,7 @@ python /path/to/spinlife/main.py
 <tr><th>文件</th><th>功能</th><th>内容</th></tr>
 <tr><td><code>wannier90_band.dat</code></td><td>输入</td><td>Wannier90 插值能带 (密 k 网格)</td></tr>
 <tr><td><code>PROCAR</code></td><td>输入</td><td>VASP LSORBIT 自旋投影数据</td></tr>
-<tr><td><code>spinlife/mobility_report.txt</code></td><td>输出</td><td>C₂D, E₁, μ, τ_p (x/y 双方向)</td></tr>
+<tr><td><code>spinlife/mobility_report.txt</code></td><td>输出</td><td>C₂D, E₁, μ, τ<sub>p</sub> (x/y 双方向)</td></tr>
 <tr><td><code>spinlife/mobility_fit.png</code></td><td>输出</td><td>C₂D + E₁ 拟合对比图</td></tr>
 <tr><td><code>spinlife/effmass_report.txt</code></td><td>输出</td><td>有效质量 m*, R²</td></tr>
 <tr><td><code>spinlife/effmass_fit.png</code></td><td>输出</td><td>有效质量抛物线拟合图</td></tr>
@@ -235,7 +297,7 @@ python /path/to/spinlife/main.py
 <tr><td><code>spinlife/spinlife_report.txt</code></td><td>输出</td><td>τ<sub>s</sub>, L<sub>PSH</sub></td></tr>
 <tr><td><code>spinlife/spinlife_results.png</code></td><td>输出</td><td>SOC 能带 + ΔE² 拟合图</td></tr>
 <tr><td><code>KPOINTS</code></td><td>输出</td><td>genkpoints — 围绕 VBM/CBM 的密集 k 网格</td></tr>
-<tr><td colspan="3"><div class="note">所有输出文件统一保存在当前目录下的 <code>spinlife/</code> 文件夹中。</div></td></tr>
+<tr><td colspan="3"><div class="note" style="margin:0;">所有输出文件统一保存在当前目录下的 <code>spinlife/</code> 文件夹中.</div></td></tr>
 </table>
 
 <!-- ============================================================ -->

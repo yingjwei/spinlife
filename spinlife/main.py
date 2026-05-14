@@ -1103,6 +1103,7 @@ def main_alpha_beta():
                     break
         if not a:
             a = float(input("  -->> 晶格常数 a (Å): "))
+        k_raw = k.copy()  # save raw k (already in Å⁻¹ from load_band_data)
         k = k_to_reciprocal(k, a)
 
         up = int(input(f"  -->> SOC 带对上能带 (1-{nbands}): ")) - 1
@@ -1110,12 +1111,12 @@ def main_alpha_beta():
         E_up = energies[:, up]
         E_lo = energies[:, lo]
 
-        # k0 at minimum SOC splitting (for ΔE² fit)
+        # k0 at minimum SOC splitting (for ΔE² fit) — use converted k
         dE = np.abs(E_up - E_lo)
         k0 = k[np.argmin(dE)]
 
-        # k0 at band edge (VBM/CBM) for m* fit (独立于 SOC k0)
-        k0_m = k[np.argmax(E_up)]
+        # k0 at band edge (VBM/CBM) for m* fit — 用 raw k 与选项 2 保持一致
+        k0_m = k_raw[np.argmax(E_up)]
 
         # Auto-scan dk — independently optimize Δk for ΔE² fit and m* fit
         print()
@@ -1126,7 +1127,7 @@ def main_alpha_beta():
         scan_m = []     # (dk, m_star, r2, npts)
         for dk_try in np.arange(0.003, 0.151, 0.002):
             ab_norm_try, Delta_try, r2_dE2 = fit_alpha_beta(k, E_up, E_lo, k0, dk_try)
-            ms_try, r2_m, npts = fit_effmass(k, E_up, k0_m, dk_try)
+            ms_try, r2_m, npts = fit_effmass(k_raw, E_up, k0_m, dk_try)
             ms_str = f"{ms_try:.2f}" if ms_try else "-"
             print(f"  {dk_try:>8.3f}  {npts:>5d}  {r2_dE2:>8.4f}  {ms_str:>7s}  {r2_m:>8.4f}")
             if ab_norm_try is not None:
