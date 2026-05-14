@@ -157,25 +157,6 @@ def fit_alpha_beta_band_average(k, E_upper, E_lower, k0=None, k_range=0.05, max_
     return m_star, ab_norm, r2_parab, r2_linear, np.sum(mask)
 
 
-def separate_alpha_beta(ab_norm, sx, sy, k0, k_range=0.05):
-    """
-    从自旋期望值分离 α, β:
-    ⟨σ_x⟩/⟨σ_y⟩ = α/β  (k→0 极限)
-    """
-    dk = np.abs(k0)  # 假设 k 坐标已经对齐
-    # 注意: sx, sy 是 k 点的数组
-    # 取 |k-k0| 最小的点
-    if len(sx) < 1:
-        return None, None, None
-
-    # 用 k0 附近值
-    w = 1.0 / (np.abs(np.arange(len(sx)) - np.argmin(np.abs(k0 - 0))) + 1)
-    # 简化: 直接取 k=k₀ 附近的自旋值
-    closest = np.argmin(np.abs(np.linspace(-0.5, 0.5, len(sx))))
-
-    # 更稳健: 取近 k₀ 处的平均
-    return None  # 将在 pipeline 中处理
-
 
 def calc_spin_lifetime(alpha=None, beta=None, m_star=None, tau_p=None, T=300, ab_norm=None):
     """
@@ -218,7 +199,11 @@ def calc_spin_lifetime(alpha=None, beta=None, m_star=None, tau_p=None, T=300, ab
     # --- PSH 周期: L_PSH = πℏ²/(m*|α|) ---
     # SI 单位: α_eV-A · 1.602e-19(J/eV) · 1e-10(m/Å) = α_Jm
     prefac = np.pi * hbar**2 / m0
-    alpha_Jm = ab * eV_to_J * 1e-10  # ab is already in eV·Å
+    if alpha is not None:
+        alpha_for_lpsh = abs(alpha) * 1e-3      # meV.A -> eV.A, use |alpha|
+    else:
+        alpha_for_lpsh = ab                       # eV.A, proxy via sqrt(a^2+b^2)
+    alpha_Jm = alpha_for_lpsh * eV_to_J * 1e-10
     L_PSH_m = prefac / (m_star * abs(alpha_Jm))
     L_PSH_um = L_PSH_m * 1e6
 

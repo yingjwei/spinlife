@@ -196,7 +196,6 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     res = {
         'label': label,
         'bands': (soc_upper, soc_lower),
-        'm_star': m_star,
         'k0': k0,
         'auto_k_range': auto_k_range,
     }
@@ -253,13 +252,14 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
                 print(f"  beta  = {beta*1000:.2f} meV.A")
                 res.update(alpha=alpha, beta=beta, ratio=ratio)
 
-                # --- 自旋寿命 (优先用 ab_norm) ---
+                # --- 自旋寿命 (使用分离后的 α, β) ---
                 if m_star:
-                    spin = calc_spin_lifetime(ab_norm=ab_norm*1000,
+                    spin = calc_spin_lifetime(alpha=alpha*1000,
+                                              beta=beta*1000,
                                               m_star=m_star, tau_p=tau_p, T=T)
                     if spin:
                         print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
-                              f"(DP via sqrt(a^2+b^2))")
+                              f"(DP: alpha={alpha*1000:.2f}, beta={beta*1000:.2f})")
                         print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
                         res['spin'] = spin
             else:
