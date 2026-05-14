@@ -273,6 +273,7 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
 # 会话共享状态 — 各模块计算结果自动传递
 _ctx = {
     'm_star': None,          # 有效质量 (m₀)
+    'ab_norm_meva': None,    # √(α²+β²) (meV·Å) — 能带平均法
     'alpha_meva': None,      # α (meV·Å)
     'beta_meva': None,       # β (meV·Å)
     'tau_p': None,           # 动量散射时间 (ps)
@@ -286,6 +287,8 @@ def _ctx_summary():
     parts = []
     if _ctx['m_star']:
         parts.append(f"m* = {_ctx['m_star']:.4f} m0")
+    if _ctx['ab_norm_meva']:
+        parts.append(f"ab = {_ctx['ab_norm_meva']:.2f} meV.A")
     if _ctx['alpha_meva']:
         parts.append(f"a = {_ctx['alpha_meva']:.2f} meV.A")
     if _ctx['beta_meva']:

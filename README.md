@@ -25,10 +25,10 @@ python -m spinlife.main
 ```
   1)  载流子迁移率 (Mobility)           应变-总能量 → C₂D, E₁, μ, τ_p
   2)  有效质量 (Wannier 能带 → m*)       Wannier 密能带 → 抛物线拟合 → m*
-  3)  SOC 参数 α/β                      Wannier ΔE² → √(α²+β²), PROCAR → α/β 比值
-  4)  自旋寿命 (结果整合)               自动装载 m*, α, β, τ_p → τ_s, L_PSH
-  5)  导出能带数据                      PROCAR / Wannier 原始数据导出
-  6)  生成 KPOINTS 文件                 读 Wannier → 选 SOC 带对 → 网格
+  3)  SOC 参数 α/β                      能带平均法 → √(α²+β²) + m* (同步)
+  4)  自旋寿命 (结果整合)                自动装载 m*, √(α²+β²), τ_p → τ_s, L_PSH
+  5)  导出能带数据                       PROCAR / Wannier 原始数据导出
+  6)  生成 KPOINTS 文件                  读 Wannier → 选 SOC 带对 → 网格
 
   [m* = 4.3210 m0  |  a = 11.23 meV.A  |  b = 9.10 meV.A  |  tau_p = 0.1500 ps]
 ```
@@ -79,17 +79,48 @@ m*/m₀ = 3.81 / |A|
 
 ### 3. SOC 参数 α/β
 
-**√(α²+β²)**: Wannier 密能带 → ΔE² vs k² 拟合 (可靠)
-**α/β 比值**: PROCAR 自旋期望 ⟨σ_x⟩/⟨σ_y⟩ 斜率拟合 (排除 Γ 点)
+**核心方法 — 能带平均法 (Band Averaging):**
 
-⇒ 分离 α, β, 自动存入会话上下文。
+SOC 劈裂的 Rashba 哈密顿量:
+
+```
+E_±(k) = E₀ + A(k-k₀)² ± √(α²+β²)·|k-k₀|
+```
+
+对 SOC 双带取平均即可消除线性 SOC 项:
+
+```
+E_avg = (E_up + E_lo)/2 = E₀ + A(k-k₀)²     → 抛物线拟合 → m*
+|E_up - E_lo|/2 = √(α²+β²)·|k-k₀|          → 线性拟合 → √(α²+β²)
+```
+
+**优势:**
+- √(α²+β²) 拟合信噪比 ~10x 优于传统 ΔE² 法 (避免 ΔE² 放大噪声)
+- m* 和 √(α²+β²) 同时获得, 无需额外有效质量计算
+- 带内迭代: 自动移除噪声点, 迭代至收敛
+
+**α/β 比值 (PROCAR 诊断, 可选):**
+
+⟨σ_x⟩/⟨σ_y⟩ 斜率比 → α/β. 但在面外 PST (Persistent Spin Texture) 体系中,
+PROCAR 自旋期望值极小 (~0.001), 噪声较大. 当自旋织构线性拟合 R²<0.5 时,
+自动跳过 α/β 分离, 自旋寿命仅使用 √(α²+β²) 估算.
 
 ### 4. 自旋寿命 (DP 机制 — 结果整合)
 
-自动装载会话上下文中的 m*, α, β, τ_p; 缺失项才要求手工输入.
-τ_p 可直接输入, 或通过 μ 反算 (τ_p = μ·m*/e).
+自动装载会话上下文中的 m*, √(α²+β²), α, β, τ_p; 缺失项要求手工输入.
 
-### 5. PROCAR 传统模式
+**DP 公式 (使用 √(α²+β²)):**
+
+```
+τ_s = ℏ² / (2·m*·m₀·(α²+β²)·τ_p)
+L_PSH ≈ 2.39 / (m*·|α|)  (μm)
+```
+
+- α/β 分离值仅在 PROCAR 拟合质量可靠 (R²≥0.5) 时用于 L_PSH 计算
+- 否则直接用 √(α²+β²) 估算 τ_s, L_PSH 跳过
+- τ_p 可直接输入, 或通过 μ 反算 (τ_p = μ·m*/e)
+
+### 5. PROCAR 传统模式 (向后兼容)
 
 ```bash
 python -m spinlife.main PROCAR --soc-vbm 44 43 --soc-cbm 45 46
@@ -104,11 +135,11 @@ python -m spinlife.main PROCAR --dump-band 44
 | `spinlife/mobility_fit.png` | Mobility | C₂D + E₁ 拟合图 |
 | `spinlife/effmass_report.txt` | 有效质量 | m*, R² |
 | `spinlife/effmass_fit.png` | 有效质量 | 抛物线拟合图 |
-| `spinlife/soc_report.txt` | α/β | √(α²+β²), α, β, R² |
-| `spinlife/soc_wannier_fit.png` | Wannier SOC | SOC 能带 + ΔE² 拟合图 |
-| `spinlife/soc_spin_fit.png` | PROCAR 自旋 | ⟨σ⟩ vs k 拟合图 |
+| `spinlife/soc_report.txt` | α/β | √(α²+β²), m*, α, β, R² |
+| `spinlife/soc_wannier_fit.png` | Wannier SOC | SOC 能带 + 能带平均法拟合图 |
+| `spinlife/soc_spin_fit.png` | PROCAR 自旋 | ⟨σ⟩ vs k 拟合图 (诊断) |
 | `spinlife/spinlife_report.txt` | 自旋寿命 | τ_s, L_PSH |
-| `spinlife/spinlife_results.png` | PROCAR | SOC 能带 + ΔE² 图 |
+| `spinlife/spinlife_results.png` | PROCAR | SOC 能带 + 能带平均法拟合图 |
 | `spinlife/band_N_data.txt` | PROCAR --dump-band | k, E, ⟨σ⟩ |
 | `KPOINTS` | genkpoints | 围绕 VBM/CBM 的密集 k 网格 |
 
