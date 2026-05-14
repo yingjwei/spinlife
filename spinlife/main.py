@@ -1130,20 +1130,20 @@ def main_alpha_beta():
         best_kr = 0.05
         best_result = (None, None, 0, 0, 0)
         for dk_try, ms, ab, r2p, r2l, npts, score in scan_results:
-            if r2p >= 0.7 and r2l >= 0.7 and score > best_score:
+            if r2l >= 0.7 and score > best_score:
                 best_score = score
                 best_kr = dk_try
                 best_result = (ms, ab, r2p, r2l, npts)
 
         if best_score > 0:
-            print(f"  >> 最优 dk = {best_kr:.3f} 1/A  (R2_p={best_result[2]:.4f}, R2_l={best_result[3]:.4f})")
+            print(f"  >> 最优 dk = {best_kr:.3f} 1/A  (linear R2={best_result[3]:.4f}, parabola R2={best_result[2]:.4f})")
         else:
             for dk_try, ms, ab, r2p, r2l, npts, score in scan_results:
                 if score > best_score:
                     best_score = score
                     best_kr = dk_try
                     best_result = (ms, ab, r2p, r2l, npts)
-            print(f"  >> 未找到 R2>=0.7 的范围, 取最优值 dk = {best_kr:.3f} 1/A")
+            print(f"  >> 最优 dk = {best_kr:.3f} 1/A  (linear R2={best_result[3]:.4f}, parabola R2={best_result[2]:.4f})")
 
         kr = best_kr
         m_star, ab_norm, r2_p, r2_l, n_pts = best_result

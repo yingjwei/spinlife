@@ -141,18 +141,25 @@ def fit_alpha_beta_band_average(k, E_upper, E_lower, k0=None, k_range=0.05, max_
     ss_tot = np.sum((dE_half[nonzero] - np.mean(dE_half[nonzero]))**2)
     r2_linear = 1 - ss_res / ss_tot if ss_tot > 1e-30 else 0
 
-    # Step 3: Iterative noise refinement
+    # Step 3: Iterative refinement: remove linear SOC term, re-fit parabola on single band
     for _ in range(max_iter):
+        # Correct upper band: remove SOC linear term -> should be pure parabola
         E_up_corr = E_up - ab_norm * abs_k
-        E_lo_corr = E_lo + ab_norm * abs_k
-        E_avg_corr = (E_up_corr + E_lo_corr) / 2.0
-        coeffs_new = np.polyfit(k2, E_avg_corr, 1)
+        coeffs_new = np.polyfit(k2, E_up_corr, 1)
         A_new = coeffs_new[0]
         if abs(A_new - A) / (abs(A) + 1e-30) < 1e-4:
             break
         A = A_new
         E0 = coeffs_new[1]
         m_star = 3.81 / abs(A) if abs(A) > 1e-12 else None
+
+    # Compute final m* and update R² from corrected single-band fit
+    if m_star:
+        E_corr = E_up - ab_norm * abs_k  # SOC-removed upper band
+        E_parab_fit = A * k2 + E0
+        ss_res = np.sum((E_corr - E_parab_fit)**2)
+        ss_tot = np.sum((E_corr - np.mean(E_corr))**2)
+        r2_parab = 1 - ss_res / ss_tot if ss_tot > 1e-30 else 0
 
     return m_star, ab_norm, r2_parab, r2_linear, np.sum(mask)
 
