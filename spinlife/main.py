@@ -1110,12 +1110,43 @@ def main_alpha_beta():
         # k0 at minimum SOC splitting
         dE = np.abs(E_up - E_lo)
         k0 = k[np.argmin(dE)]
-        try:
-            kr = float(input("  -->> 拟合范围 ±Δk (Å⁻¹) [0.05]: ") or 0.05)
-        except (EOFError, KeyboardInterrupt):
-            kr = 0.05
 
-        m_star, ab_norm, r2_p, r2_l, n_pts = fit_alpha_beta_band_average(k, E_up, E_lo, k0, kr)
+        # Auto-scan dk to find optimal fitting range
+        print()
+        print("  >> 自动扫描最优拟合范围...")
+        print(f"  {'dk_max':>8s}  {'pts':>5s}  {'m*':>7s}  R2_parab  R2_lin    sqrt(a2+b2)")
+        print("  " + "-" * 55)
+        scan_results = []
+        for dk_try in np.arange(0.003, 0.151, 0.002):
+            ms, ab, r2p, r2l, npts = fit_alpha_beta_band_average(k, E_up, E_lo, k0, dk_try)
+            if ab is not None:
+                score = r2p + r2l
+                scan_results.append((dk_try, ms, ab, r2p, r2l, npts, score))
+                ab_str = f"{ab*1000:.2f}" if ab else "-"
+                ms_str = f"{ms:.2f}" if ms else "-"
+                print(f"  {dk_try:>8.3f}  {npts:>5d}  {ms_str:>7s}  {r2p:>10.4f}  {r2l:>10.4f}  {ab_str:>13s}")
+
+        best_score = -1
+        best_kr = 0.05
+        best_result = (None, None, 0, 0, 0)
+        for dk_try, ms, ab, r2p, r2l, npts, score in scan_results:
+            if r2p >= 0.7 and r2l >= 0.7 and score > best_score:
+                best_score = score
+                best_kr = dk_try
+                best_result = (ms, ab, r2p, r2l, npts)
+
+        if best_score > 0:
+            print(f"  >> 最优 dk = {best_kr:.3f} 1/A  (R2_p={best_result[2]:.4f}, R2_l={best_result[3]:.4f})")
+        else:
+            for dk_try, ms, ab, r2p, r2l, npts, score in scan_results:
+                if score > best_score:
+                    best_score = score
+                    best_kr = dk_try
+                    best_result = (ms, ab, r2p, r2l, npts)
+            print(f"  >> 未找到 R2>=0.7 的范围, 取最优值 dk = {best_kr:.3f} 1/A")
+
+        kr = best_kr
+        m_star, ab_norm, r2_p, r2_l, n_pts = best_result
         if ab_norm:
             sqrt_ab = ab_norm
             print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å  (linear R²={r2_l:.4f})")
@@ -1167,8 +1198,7 @@ def main_alpha_beta():
     ratio = None
     procar_path = _prompt_path("PROCAR 路径", default_names=['PROCAR'], allow_skip=True)
     if procar_path and os.path.exists(procar_path):
-        print("
-  [2/2] α/β 比值 — PROCAR 自旋织构 (Gamma 点直接做比)")
+        print("\n  [2/2] α/β 比值 — PROCAR 自旋织构 (Gamma 点直接做比)")
         print("  方法: ⟨σ_x⟩/⟨σ_y⟩ → α/β (取 Γ 最近邻可靠 k 点直接做比)")
         print()
         procar = PROCAR(procar_path)
