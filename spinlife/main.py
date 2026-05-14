@@ -43,8 +43,7 @@ except ImportError:
     _HAS_MPL = False
 
 from spinlife.read_procar import PROCAR
-from spinlife.fit_soc import (fit_effmass, fit_alpha_beta,
-                              fit_alpha_beta_band_average, calc_spin_lifetime)
+from spinlife.fit_soc import fit_effmass, fit_alpha_beta, calc_spin_lifetime
 from spinlife.mobility.calc_mobility import (read_POSCAR_A0, read_POSCAR_a,
                                              fit_C2D, fit_E1,
                                              calc_mu, C2D_Jm2_from_d2E,
@@ -183,11 +182,20 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     else:
         k0 = k_scan[np.argmin(E_slice)]
 
+    # --- 有效质量 ---
     k_step = (np.min(np.diff(sorted(set(k_scan))))
               if len(set(k_scan)) > 1 else 0.05)
     auto_k_range = max(k_range, k_step * 1.5)
 
-    # --- SOC 劈裂 + 能带平均法 ---
+    m_star, r2_m, n_pts = fit_effmass(k_scan, E_slice, k0, auto_k_range)
+
+    if m_star:
+        print(f"  m* = {m_star:.2f} m0  (R^2={r2_m:.3f}, "
+              f"k0={k0:.3f}, range=+/-{auto_k_range:.3f})")
+    else:
+        print(f"  m*: fit failed ({n_pts} pts in +/-{auto_k_range})")
+
+    # --- SOC 劈裂 + alpha/beta ---
     E_up = procar.get_band_energy(soc_upper)
     E_lo = procar.get_band_energy(soc_lower)
     sx_up, sy_up, sz_up = procar.get_spin(soc_upper)
@@ -196,6 +204,7 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     res = {
         'label': label,
         'bands': (soc_upper, soc_lower),
+        'm_star': m_star,
         'k0': k0,
         'auto_k_range': auto_k_range,
     }
@@ -213,71 +222,50 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
     res['sx_up_scan'] = sx_up_scan
     res['sy_up_scan'] = sy_up_scan
 
-    # --- 能带平均法: 同时拟合 m* 和 sqrt(a^2+b^2) ---
-    m_star, ab_norm, r2_p, r2_l, n_pts = fit_alpha_beta_band_average(
+    ab_norm, Delta, r2_ab = fit_alpha_beta(
         k_scan, E_up_scan, E_lo_scan, k0, auto_k_range)
 
-    res['m_star'] = m_star
-    if m_star:
-        print(f"  m* = {m_star:.2f} m0  (parabola R^2={r2_p:.4f}, "
-              f"k0={k0:.3f}, range=+/-{auto_k_range:.3f}, {n_pts} pts)")
-        _ctx['m_star'] = m_star
-
     if ab_norm:
-        _ctx['ab_norm_meva'] = ab_norm * 1000
-        print(f"  sqrt(a^2+b^2) = {ab_norm*1000:.2f} meV.A  "
-              f"(linear R^2={r2_l:.4f})")
-        res.update(ab_norm=ab_norm, r2_parab=r2_p, r2_linear=r2_l)
+        print(f"  sqrt(a^2+b^2) = {ab_norm*1000:.2f} meV.A")
+        print(f"  Delta         = {Delta*1000:.2f} meV  "
+              f"(R^2={r2_ab:.4f})")
+        res.update(ab_norm=ab_norm, Delta=Delta, r2_ab=r2_ab)
 
-        # --- 自旋织构 -> alpha/beta 分离 (Gamma 点做比) ---
+        # 自旋织构 -> alpha/beta 分离
         dk = np.abs(k_scan - k0)
         near = dk <= auto_k_range
-        ratio = None
-        for sx_s, sy_s in [(sx_up_scan, sy_up_scan), (sx_lo_scan, sy_lo_scan)]:
-            order_k = np.argsort(dk)
-            for idx in order_k:
-                if dk[idx] < 1e-10 or not near[idx]:
-                    continue
-                if abs(sx_s[idx]) > 1e-3 and abs(sy_s[idx]) > 1e-3:
-                    r = sx_s[idx] / sy_s[idx]
-                    if ratio is None or abs(r) > abs(ratio):
-                        ratio = r
-                    break
+        if np.sum(near) >= 3:
+            kn = k_scan[near] - k0
+            p_x = np.polyfit(kn, sx_up_scan[near], 1)
+            p_y = np.polyfit(kn, sy_up_scan[near], 1)
+            ratio = p_x[0] / (p_y[0] + 1e-30) if abs(p_y[0]) > 1e-30 else 1e6
 
-        if ratio is not None and abs(ratio) > 1e-6 and abs(ratio) < 1e6:
-            alpha = ab_norm / np.sqrt(1 + 1 / ratio**2)
-            beta = alpha / ratio
-            print(f"  <sx>/<sy> ratio = {ratio:.3f}")
-            print(f"  alpha = {alpha*1000:.2f} meV.A")
-            print(f"  beta  = {beta*1000:.2f} meV.A")
-            res.update(alpha=alpha, beta=beta, ratio=ratio)
+            p_x2 = np.polyfit(kn, sx_lo_scan[near], 1)
+            p_y2 = np.polyfit(kn, sy_lo_scan[near], 1)
+            ratio2 = p_x2[0] / (p_y2[0] + 1e-30) if abs(p_y2[0]) > 1e-30 else 1e6
+            if abs(ratio2) > abs(ratio):
+                ratio = ratio2
 
-            # --- 自旋寿命 (使用分离后的 alpha, beta) ---
-            if m_star:
-                spin = calc_spin_lifetime(alpha=alpha*1000,
-                                          beta=beta*1000,
-                                          m_star=m_star, tau_p=tau_p, T=T)
-                if spin:
-                    print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
-                          f"(DP: alpha={alpha*1000:.2f}, beta={beta*1000:.2f})")
-                    print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
-                    res['spin'] = spin
-        elif ratio is not None:
-            print(f"  (spin ratio unstable: {ratio:.3f}, skip)")
-            res.update(alpha=None, beta=None, ratio=None)
-            # ab_norm 仍可用
-            if m_star:
-                spin = calc_spin_lifetime(ab_norm=ab_norm*1000,
-                                          m_star=m_star, tau_p=tau_p, T=T)
-                if spin:
-                    print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps  "
-                          f"(via sqrt(a^2+b^2) only)")
-                    res['spin'] = spin
-        else:
-            print(f"  (no in-range k-point with reliable Sx/Sy)")
-            res.update(alpha=None, beta=None, ratio=None)
+            if abs(ratio) > 1e-6 and abs(ratio) < 1e6:
+                alpha = ab_norm / np.sqrt(1 + 1 / ratio**2)
+                beta = alpha / ratio
+                print(f"  <sx>/<sy> ratio = {ratio:.3f}")
+                print(f"  alpha = {alpha*1000:.2f} meV.A")
+                print(f"  beta  = {beta*1000:.2f} meV.A")
+                res.update(alpha=alpha, beta=beta, ratio=ratio)
+
+                # --- 自旋寿命 ---
+                if m_star:
+                    spin = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
+                    if spin:
+                        print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps")
+                        print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
+                        res['spin'] = spin
+            else:
+                print(f"  (spin ratio unstable: {ratio:.3f}, skip)")
+                res.update(alpha=None, beta=None, ratio=None)
     else:
-        print(f"  alpha/beta: fit failed (R^2={r2_l})")
+        print(f"  alpha/beta: fit failed (R^2={r2_ab})")
 
     return res
 
@@ -285,7 +273,6 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
 # 会话共享状态 — 各模块计算结果自动传递
 _ctx = {
     'm_star': None,          # 有效质量 (m₀)
-    'ab_norm_meva': None,    # √(α²+β²) (meV·Å) — 能带平均法
     'alpha_meva': None,      # α (meV·Å)
     'beta_meva': None,       # β (meV·Å)
     'tau_p': None,           # 动量散射时间 (ps)
@@ -299,8 +286,6 @@ def _ctx_summary():
     parts = []
     if _ctx['m_star']:
         parts.append(f"m* = {_ctx['m_star']:.4f} m0")
-    if _ctx['ab_norm_meva']:
-        parts.append(f"ab = {_ctx['ab_norm_meva']:.2f} meV.A")
     if _ctx['alpha_meva']:
         parts.append(f"a = {_ctx['alpha_meva']:.2f} meV.A")
     if _ctx['beta_meva']:
@@ -1068,14 +1053,14 @@ def main_effmass_wannier():
 
 
 def main_alpha_beta():
-    """SOC α/β: band-averaging → √(α²+β²) + m*, PROCAR spin → α/β ratio"""
+    """SOC α/β: Wannier ΔE² 拟合 → √(α²+β²), PROCAR 自旋 → α/β 比值"""
     print()
     print("=" * 65)
     print("  SOC 参数 α/β 计算")
     print("=" * 65)
     print()
-    print("  方法: Wannier SOC 双带 → 能带平均法 → m* + √(α²+β²)")
-    print("        PROCAR 自旋织构 (Gamma 点直接做比) → α/β 比值")
+    print("  方法: Wannier 密能带拟合 → √(α²+β²) + m*")
+    print("        PROCAR Γ 点直接做比 → α/β 比值")
     print()
 
     # ---- Part 1: √(α²+β²) from Wannier ----
@@ -1113,79 +1098,68 @@ def main_alpha_beta():
 
         # Auto-scan dk to find optimal fitting range
         print()
-        print("  >> 自动扫描最优拟合范围...")
-        print(f"  {'dk_max':>8s}  {'pts':>5s}  {'m*':>7s}  R2_parab  R2_lin    sqrt(a2+b2)")
-        print("  " + "-" * 55)
+        print("  >> Auto-scanning dk for best fit...")
+        print(f"  {'dk_max':>8s}  {'pts':>5s}  {'R2_dE2':>8s}  {'m*':>7s}  {'R2_m':>8s}")
+        print(f"  {'-'*45}")
         scan_results = []
         for dk_try in np.arange(0.003, 0.151, 0.002):
-            ms, ab, r2p, r2l, npts = fit_alpha_beta_band_average(k, E_up, E_lo, k0, dk_try)
-            if ab is not None:
-                score = r2p + r2l
-                scan_results.append((dk_try, ms, ab, r2p, r2l, npts, score))
-                ab_str = f"{ab*1000:.2f}" if ab else "-"
-                ms_str = f"{ms:.2f}" if ms else "-"
-                print(f"  {dk_try:>8.3f}  {npts:>5d}  {ms_str:>7s}  {r2p:>10.4f}  {r2l:>10.4f}  {ab_str:>13s}")
+            ab_norm_try, Delta_try, r2_dE2 = fit_alpha_beta(k, E_up, E_lo, k0, dk_try)
+            ms_try, r2_m, npts = fit_effmass(k, E_up, k0, dk_try)
+            if ab_norm_try is not None:
+                scan_results.append((dk_try, ab_norm_try, Delta_try, r2_dE2, ms_try, r2_m, npts))
+                ms_str = f"{ms_try:.2f}" if ms_try else "-"
+                print(f"  {dk_try:>8.3f}  {npts:>5d}  {r2_dE2:>8.4f}  {ms_str:>7s}  {r2_m:>8.4f}")
 
-        best_score = -1
-        best_kr = 0.05
-        best_result = (None, None, 0, 0, 0)
-        for dk_try, ms, ab, r2p, r2l, npts, score in scan_results:
-            if r2l >= 0.7 and score > best_score:
-                best_score = score
-                best_kr = dk_try
-                best_result = (ms, ab, r2p, r2l, npts)
+        # Select dk with best ΔE² fit quality (R2_dE2), the m* is a secondary output
+        scan_sorted = sorted(scan_results, key=lambda x: -x[3])  # sort by R2_dE2 descending
+        best_kr, best_ab, best_Delta, best_r2 = scan_sorted[0][0], scan_sorted[0][1], scan_sorted[0][2], scan_sorted[0][3]
 
-        if best_score > 0:
-            print(f"  >> 最优 dk = {best_kr:.3f} 1/A  (linear R2={best_result[3]:.4f}, parabola R2={best_result[2]:.4f})")
+        if best_r2 >= 0.7:
+            print(f"\n  >> Best dk = {best_kr:.3f} 1/A  (R²_ΔE² = {best_r2:.4f})")
         else:
-            for dk_try, ms, ab, r2p, r2l, npts, score in scan_results:
-                if score > best_score:
-                    best_score = score
-                    best_kr = dk_try
-                    best_result = (ms, ab, r2p, r2l, npts)
-            print(f"  >> 最优 dk = {best_kr:.3f} 1/A  (linear R2={best_result[3]:.4f}, parabola R2={best_result[2]:.4f})")
+            print(f"\n  >> Best available dk = {best_kr:.3f} 1/A  (R²_ΔE² = {best_r2:.4f}, <0.7)")
 
         kr = best_kr
-        m_star, ab_norm, r2_p, r2_l, n_pts = best_result
+        ab_norm = best_ab
+        Delta = best_Delta
+        r2 = best_r2
+
+        # Single-band parabola fit for m* (consistent with menu option 2)
+        m_star, r2_m, n_pts_m = fit_effmass(k, E_up, k0, kr)
+        if m_star:
+            _ctx['m_star'] = m_star
+
         if ab_norm:
             sqrt_ab = ab_norm
-            print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å  (linear R²={r2_l:.4f})")
+            print(f"\n  √(α²+β²) = {sqrt_ab*1000:.2f} meV·Å")
+            print(f"  Δ       = {Delta*1000:.2f} meV  (R² = {r2:.4f})")
             if m_star:
-                print(f"  m*      = {m_star:.2f} m0  (parabola R²={r2_p:.4f}, {n_pts} pts)")
-                _ctx['m_star'] = m_star
+                print(f"  m*      = {m_star:.2f} m₀  (R² = {r2_m:.4f}, {n_pts_m} pts)")
 
-            # 绘图: 能带平均 + 拟合
+            # 绘图: ΔE² vs k² + 拟合 + SOC 能带
             if _HAS_MPL:
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                # 左: SOC 能带 + 带平均
-                E_avg = (E_up + E_lo) / 2
-                mask_k = np.abs(k - k0) <= kr
+                # 左: SOC 能带
+                mid = nk // 2
                 ax1.plot(k, E_up * 1000, 'o-', ms=2, lw=1, label=f'Band {up+1}')
                 ax1.plot(k, E_lo * 1000, 's-', ms=2, lw=1, label=f'Band {lo+1}')
-                ax1.plot(k, E_avg * 1000, '-', lw=2, color='#2E8B57', alpha=0.7, label='E_avg')
-                if m_star:
-                    A_coeff = 3.81 / m_star
-                    k2_fit = (k[mask_k] - k0) ** 2
-                    E_parab = (A_coeff * k2_fit + np.mean(E_avg[mask_k])) * 1000
-                    ax1.plot(k[mask_k], E_parab, '--', lw=1.5, color='#1a6b3c', label='parabola fit')
                 ax1.axvspan(k0 - kr, k0 + kr, alpha=0.12, color='blue', label='fit range')
                 ax1.axvline(k0, color='gray', ls='--', alpha=0.4)
-                ax1.set_xlabel('k (Ang^-1)'); ax1.set_ylabel('E (meV)')
-                ax1.legend(fontsize=8); ax1.set_title('SOC Bands + Band Average')
+                ax1.set_xlabel('k (Å⁻¹)'); ax1.set_ylabel('E (meV)')
+                ax1.legend(fontsize=8); ax1.set_title('SOC Bands')
                 ax1.grid(alpha=0.3)
-                # 右: |E_up - E_lo|/2 vs |k-k0| (linear fit)
-                abs_k = np.abs(k - k0)
-                dE_half = np.abs(E_up - E_lo) / 2 * 1000
-                ax2.plot(abs_k, dE_half, 'o', ms=5, color='#E24A33')
-                mask_l = (abs_k <= kr) & (abs_k > 1e-10)
-                if np.sum(mask_l) >= 2:
-                    c_lin = np.polyfit(abs_k[mask_l], dE_half[mask_l], 1)
-                    xs = np.linspace(0, kr * 1.05, 100)
-                    ax2.plot(xs, c_lin[0] * xs + c_lin[1], '-', color='#348ABD',
-                             label=f'Fit slope={c_lin[0]:.2f} meV/A')
-                ax2.set_xlabel(r'$|k - k_0|$  (Ang^{-1}$)')
-                ax2.set_ylabel(r'$|E_{up} - E_{lo}|/2$  (meV)')
-                ax2.legend(fontsize=9); ax2.set_title(r'Linear fit -> sqrt(alpha^2+beta^2)')
+                # 右: ΔE² vs k²
+                dk2 = (k - k0) ** 2
+                dE = np.abs(E_up - E_lo) * 1000
+                ax2.plot(dk2, dE ** 2, 'o', ms=5, color='#E24A33')
+                mask = dk2 <= kr ** 2
+                c2 = np.polyfit(dk2[mask], dE[mask] ** 2, 1)
+                xs = np.linspace(0, max(dk2[mask]) * 1.05, 100)
+                ax2.plot(xs, c2[0] * xs + c2[1], '-', color='#348ABD',
+                         label=f'Fit  R²={r2:.4f}')
+                ax2.set_xlabel(r'$(k - k_0)^2$  (Å$^{-2}$)')
+                ax2.set_ylabel(r'$\Delta E^2$  (meV$^2$)')
+                ax2.legend(fontsize=9); ax2.set_title(r'$\Delta E^2$ fit → $\sqrt{\alpha^2+\beta^2}$')
                 ax2.grid(alpha=0.3)
                 plt.tight_layout()
                 plt.savefig(os.path.join(OUTPUT_DIR, 'soc_wannier_fit.png'), dpi=200, bbox_inches='tight')
@@ -1194,12 +1168,12 @@ def main_alpha_beta():
     elif path:
         print("  [文件不存在]")
 
-    # ---- Part 2: α/β ratio from PROCAR (Gamma 点直接做比) ----
+    # ---- Part 2: α/β ratio from PROCAR (斜率拟合, 非点对点平均) ----
     ratio = None
     procar_path = _prompt_path("PROCAR 路径", default_names=['PROCAR'], allow_skip=True)
     if procar_path and os.path.exists(procar_path):
-        print("\n  [2/2] α/β 比值 — PROCAR 自旋织构 (Gamma 点直接做比)")
-        print("  方法: ⟨σ_x⟩/⟨σ_y⟩ → α/β (取 Γ 最近邻可靠 k 点直接做比)")
+        print("\n  [2/2] α/β 比值 — PROCAR Γ 点直接做比")
+        print("  方法: 找到离 Γ 最近的可靠 k 点, ⟨σ_x⟩/⟨σ_y⟩ = α/β (k·p 一阶)")
         print()
         procar = PROCAR(procar_path)
         kpts = procar.get_kpoints_cart()
@@ -1212,9 +1186,6 @@ def main_alpha_beta():
 
         # 沿 ky≈0 切片 (Γ-X 方向)
         idx_slice, k_scan, order = get_k_slice(kpts, procar)
-        k0 = k_scan[np.argmin(np.abs(k_scan))]
-
-        near = (np.abs(k_scan - k0) <= kr) & (np.abs(k_scan - k0) > 1e-10)
 
         # 排序后的切片自旋数据
         sx_up_s = sx_up[idx_slice][order]
@@ -1222,55 +1193,56 @@ def main_alpha_beta():
         sx_lo_s = sx_lo[idx_slice][order]
         sy_lo_s = sy_lo[idx_slice][order]
 
-        # 显示数据表
+        # 显示全部 k 点数据
         print(f"\n  {'k (Å⁻¹)':>10}  {'⟨σ_x⟩':>10}  {'⟨σ_y⟩':>10}  {'⟨σ_x⟩/⟨σ_y⟩':>12}")
         print(f"  {'-'*46}")
         for i in range(len(k_scan)):
             r_str = f"{sx_up_s[i]/sy_up_s[i]:.2f}" if abs(sy_up_s[i]) > 1e-10 else "-"
             print(f"  {k_scan[i]:>10.4f}  {sx_up_s[i]:>10.4f}  "
-                      f"{sy_up_s[i]:>10.4f}  {r_str:>12}")
+                  f"{sy_up_s[i]:>10.4f}  {r_str:>12}")
 
-        # Gamma 点做比: 取 k0 最近邻且 Sx, Sy 可靠的点
+        # Gamma 点直接做比: 在全部 k 点中找离 Γ 最近的可信点
         best_ratio = None
-        dk = np.abs(k_scan - k0)
-        for sx_s, sy_s, lbl in [(sx_up_s, sy_up_s, f"Band {up}"),
-                                 (sx_lo_s, sy_lo_s, f"Band {lo}")]:
-            order_k = np.argsort(dk)
-            for idx in order_k:
-                if dk[idx] < 1e-10 or not near[idx]:
-                    continue
-                if abs(sx_s[idx]) > 1e-3 and abs(sy_s[idx]) > 1e-3:
-                    r = sx_s[idx] / sy_s[idx]
-                    print(f"\n  {lbl}: k-k0={dk[idx]:+.4f}, "
-                          f"Sx={sx_s[idx]:+.4f}, Sy={sy_s[idx]:+.4f}, "
-                          f"alpha/beta = {r:.4f}")
-                    if best_ratio is None or abs(r) > abs(best_ratio):
-                        best_ratio = r
-                    break
+        best_i = None
+        dist = np.abs(k_scan)
+        order_by_dist = np.argsort(dist)
+        for i in order_by_dist:
+            if dist[i] > 1e-10 and abs(sx_up_s[i]) > 1e-3 and abs(sy_up_s[i]) > 1e-3:
+                best_ratio = sx_up_s[i] / sy_up_s[i]
+                best_i = i
+                break
 
         if best_ratio is not None:
             ratio = best_ratio
-            print(f"\n  -> alpha/beta = {ratio:.4f}")
+            print(f"\n  → α/β = {ratio:.4f}  (k={k_scan[best_i]:.4f} Å⁻¹, "
+                  f"⟨σ_x⟩={sx_up_s[best_i]:.3f}, ⟨σ_y⟩={sy_up_s[best_i]:.3f})")
 
-            # Plot: <sigma_x> & <sigma_y> vs k (scatter only)
+            # 绘图: ⟨σ_x⟩ & ⟨σ_y⟩ vs k + 标记 Γ 点比值
             if _HAS_MPL:
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                ax1.plot(k_scan[near], sx_up_s[near], 'o', ms=6, color='#E24A33', label=f'Band {up}')
-                ax1.plot(k_scan[near], sx_lo_s[near], 's', ms=6, color='#348ABD', label=f'Band {lo}')
+                for label, sx_s, sy_s, color in [
+                    (f"Band {up}", sx_up_s, sy_up_s, '#E24A33'),
+                    (f"Band {lo}", sx_lo_s, sy_lo_s, '#348ABD'),
+                ]:
+                    ax1.plot(k_scan, sx_s, 'o-', ms=4, lw=0.8, color=color, label=label)
+                    ax2.plot(k_scan, sy_s, 'o-', ms=4, lw=0.8, color=color, label=label)
                 ax1.axhline(0, color='gray', ls='--', alpha=0.3)
-                ax1.set_xlabel('k (Ang^-1)'); ax1.set_ylabel(r'<sigma_x>')
-                ax1.legend(fontsize=8); ax1.set_title('<sigma_x> vs k')
+                ax1.axvline(k_scan[best_i], color='green', ls=':', alpha=0.6,
+                            label=f'Γ-point (α/β = {ratio:.4f})')
+                ax1.set_xlabel('k (Å⁻¹)'); ax1.set_ylabel(r'$\langle\sigma_x\rangle$')
+                ax1.legend(fontsize=8); ax1.set_title(r'$\langle\sigma_x\rangle$')
                 ax1.grid(alpha=0.3)
-                ax2.plot(k_scan[near], sy_up_s[near], 'o', ms=6, color='#E24A33', label=f'Band {up}')
-                ax2.plot(k_scan[near], sy_lo_s[near], 's', ms=6, color='#348ABD', label=f'Band {lo}')
                 ax2.axhline(0, color='gray', ls='--', alpha=0.3)
-                ax2.set_xlabel('k (Ang^-1)'); ax2.set_ylabel(r'<sigma_y>')
-                ax2.legend(fontsize=8); ax2.set_title('<sigma_y> vs k')
+                ax2.axvline(k_scan[best_i], color='green', ls=':', alpha=0.6,
+                            label=f'Γ-point (α/β = {ratio:.4f})')
+                ax2.set_xlabel('k (Å⁻¹)'); ax2.set_ylabel(r'$\langle\sigma_y\rangle$')
+                ax2.legend(fontsize=8); ax2.set_title(r'$\langle\sigma_y\rangle$')
                 ax2.grid(alpha=0.3)
                 plt.tight_layout()
                 plt.savefig(os.path.join(OUTPUT_DIR, 'soc_spin_fit.png'), dpi=200, bbox_inches='tight')
                 plt.close()
                 print(f"  [Plot -> {OUTPUT_DIR}/soc_spin_fit.png]")
+
     # ---- Part 3: Combine ----
     print()
     print("=" * 65)
