@@ -1405,7 +1405,7 @@ def main_spin_lifetime_menu():
     result = calc_spin_lifetime(alpha_eV, beta_eV, m_star, tau_p, T)
 
     if result:
-        print(f"\n  α_eff = {result['alpha_eff_meva']:.2f} meV·Å")
+        print(f"\n  α_eff = {result['alpha_eff_meVA']:.2f} meV·Å")
         print(f"  τ_s   = {result['tau_s_ps']:.2f} ps")
         print(f"  L_PSH = {result['L_PSH_um']:.2f} μm")
         with open(os.path.join(OUTPUT_DIR, 'spinlife_report.txt'), 'w') as f:
