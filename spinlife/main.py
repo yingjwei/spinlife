@@ -256,9 +256,9 @@ def run_soc_fit(label, procar, kpts, idx_slice, k_scan, order,
                 print(f"  beta  = {beta*1000:.2f} meV.A")
                 res.update(alpha=alpha, beta=beta, ratio=ratio)
 
-                # --- 自旋寿命 ---
+                # --- 自旋寿命 (函数接收 meV·Å) ---
                 if m_star:
-                    spin = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
+                    spin = calc_spin_lifetime(alpha * 1000, beta * 1000, m_star, tau_p, T)
                     if spin:
                         print(f"  tau_s  = {spin['tau_s_ps']:.2f} ps")
                         print(f"  L_PSH  = {spin['L_PSH_um']:.2f} um")
@@ -1700,7 +1700,7 @@ def main_spin_lifetime_menu():
     print("  自旋寿命 (Spin lifetime τ_s)")
     print("=" * 65)
     print()
-    print("  τ_s = ℏ² / (2 · m* · m₀ · α_eff² · τ_p)")
+    print("  τ_s = ℏ⁴ / (8 · m* · m₀ · α_eff² · k_B · T · τ_p)")
     print("  τ_p = μ · m* / e   (μ 反算)")
     print()
 
@@ -1796,9 +1796,7 @@ def main_spin_lifetime_menu():
         ctx['T'] = T
 
     # --- 5. 计算 ---
-    alpha_eV = alpha * 1e-3
-    beta_eV = beta * 1e-3
-    result = calc_spin_lifetime(alpha_eV, beta_eV, m_star, tau_p, T)
+    result = calc_spin_lifetime(alpha, beta, m_star, tau_p, T)
 
     if result:
         print(f"\n  α_eff = {result['alpha_eff_meVA']:.2f} meV·Å")

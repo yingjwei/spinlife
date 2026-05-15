@@ -22,6 +22,8 @@ hbar = 6.582119569e-16       # eV·s
 eV_to_J = 1.602176634e-19    # J/eV
 m0 = 9.10938356e-31           # kg (电子静质量)
 A_to_m = 1e-10                # Å → m
+k_B = 1.380649e-23            # J/K
+hbar_SI = hbar * eV_to_J      # J·s (= 1.0545718e-34)
 
 
 def fit_effmass(k, E, k0, k_range=0.05):
@@ -167,72 +169,79 @@ def fit_alpha_beta_band_average(k, E_upper, E_lower, k0=None, k_range=0.05, max_
 
 def calc_spin_lifetime(alpha=None, beta=None, m_star=None, tau_p=None, T=300, ab_norm=None):
     """
-    自旋寿命 (DP 机制简化模型)
+    自旋寿命 (DP 机制) + PSH 周期
 
     支持两种调用方式:
       1. (alpha, beta, m_star, tau_p, T) — 已知 α/β 比值
       2. (ab_norm, m_star, tau_p, T) — 仅知 √(α²+β²) 时
 
+    所有 SOC 参数以 **meV·Å** 传入.
+    温度 T (K) 用于 2D 非简并统计下的 ⟨k²⟩ 热平均.
+
     参数:
       alpha, beta: meV·Å (若不可用传 None)
-      m_star: 有效质量 (m₀ 单位)
+      m_star: 有效质量 (m₀ 单位, 无量纲)
       tau_p: 动量散射时间 (ps)
       T: 温度 (K)
-      ab_norm: √(α²+β²) in meV·Å (优先使用)
+      ab_norm: √(α²+β²) in meV·Å (优先级高于 alpha/beta)
 
     输出:
-      - L_PSH (μm): PSH 周期
-      - tau_s (ps): DP 自旋寿命
+      - tau_s_ps (ps): DP 自旋寿命
+      - L_PSH_um (μm): PSH 周期
+      - alpha_eff_meVA (meV·Å): SU(2) 破缺项 |α−β|
+      - omega_tau_p: 进动角 × τ_p (诊断用)
+      - ab_norm_meVA (meV·Å): √(α²+β²)
+
+    公式 (2D 非简并, motional narrowing 区间):
+      τ_s = ℏ⁴ / (8 · m* · m₀ · α_eff² · k_B · T · τ_p)
+      L_PSH = πℏ² / (m* · m₀ · |α|)
     """
     if m_star is None or tau_p is None:
         return None
 
-    # 优先使用 ab_norm (能带平均法结果), 其次 α/β
+    # 统一: 所有输入 → eV·Å (1 meV·Å = 1e-3 eV·Å)
     if ab_norm is not None:
-        ab = ab_norm * 1e-3  # meV·Å → eV·Å
-        alpha_eff = ab_norm * 1e-3  # 保守估计: α_eff = √(α²+β²)
+        ab_evA = ab_norm * 1e-3
+        alpha_eff_evA = ab_norm * 1e-3
     elif alpha is not None:
-        ab = np.sqrt(alpha**2 + beta**2) if beta else abs(alpha)
-        alpha_eff = abs(alpha - beta) if beta else abs(alpha)
-        if alpha_eff < 1e-12:
-            alpha_eff = ab * 0.01
-        ab = ab * 1e-3  # meV·Å → eV·Å
+        ab_evA = np.sqrt(alpha**2 + beta**2) * 1e-3 if beta else abs(alpha) * 1e-3
+        alpha_eff_evA = abs(alpha - beta) * 1e-3 if beta else abs(alpha) * 1e-3
+        if alpha_eff_evA < 1e-15:
+            alpha_eff_evA = ab_evA * 0.01
     else:
         return None
 
-    if ab < 1e-15 or tau_p < 1e-15:
+    if ab_evA < 1e-15 or tau_p < 1e-15:
         return None
 
-    # --- PSH 周期: L_PSH = πℏ²/(m*|α|) ---
-    # SI 单位: α_eV-A · 1.602e-19(J/eV) · 1e-10(m/Å) = α_Jm
-    prefac = np.pi * hbar**2 / m0
+    # --- 全部转 SI ---
+    alpha_Jm = alpha_eff_evA * eV_to_J * A_to_m            # eV·Å → J·m
+    tau_p_s = tau_p * 1e-12                                 # ps → s
+
+    # --- PSH 周期: L_PSH = πℏ² / (m* · m₀ · |α|) ---
     if alpha is not None:
-        alpha_for_lpsh = abs(alpha) * 1e-3      # meV.A -> eV.A, use |alpha|
+        alpha_lpsh_evA = abs(alpha) * 1e-3                  # meV·Å → eV·Å, 用 |α|
     else:
-        alpha_for_lpsh = ab                       # eV.A, proxy via sqrt(a^2+b^2)
-    alpha_Jm = alpha_for_lpsh * eV_to_J * 1e-10
-    L_PSH_m = prefac / (m_star * abs(alpha_Jm))
+        alpha_lpsh_evA = ab_evA                              # proxy via √(α²+β²)
+    alpha_lpsh_Jm = alpha_lpsh_evA * eV_to_J * A_to_m
+    L_PSH_m = np.pi * hbar_SI**2 / (m_star * m0 * abs(alpha_lpsh_Jm))
     L_PSH_um = L_PSH_m * 1e6
 
-    # --- DP 机制自旋寿命 ---
-    # τ_s ≈ ℏ² / (2 · m* · m₀ · α_eff² · τ_p)
-    # α_eff_Jm: same unit conversion as above
-    alpha_eff_Jm = alpha_eff * eV_to_J * 1e-10  # alpha_eff is in eV·Å
-    tau_p_s = tau_p * 1e-12
-    tau_s_s = hbar**2 / (2 * m_star * m0 * alpha_eff_Jm**2 * tau_p_s)
+    # --- DP 自旋寿命: τ_s = ℏ⁴ / (8 · m* · m₀ · α_eff² · k_B · T · τ_p) ---
+    # 推导: 1/τ_s = ⟨Ω²⟩·τ_p, Ω = 2αk/ℏ, ⟨k²⟩ = 2m*k_BT/ℏ² (2D 非简并)
+    tau_s_s = hbar_SI**4 / (8 * m_star * m0 * alpha_Jm**2 * k_B * T * tau_p_s)
     tau_s_ps = tau_s_s * 1e12
 
-    # 自旋进动频率估算
-    omega_avg = 2 * ab * eV_to_J * 1e-10 / hbar  # rad/s
+    # 自旋进动频率 (诊断)
+    omega_avg = 2 * ab_evA * eV_to_J * A_to_m / hbar_SI    # rad/s
     omega_tau_p = omega_avg * tau_p_s
 
-    # alpha_eff 恢复为 meV·Å 输出
-    alpha_eff_meva = alpha_eff * 1e3 if alpha_eff is not None else None
+    alpha_eff_meva = alpha_eff_evA * 1e3                    # eV·Å → meV·Å 输出
 
     return {
         'tau_s_ps': tau_s_ps,
         'L_PSH_um': L_PSH_um,
         'alpha_eff_meVA': alpha_eff_meva,
         'omega_tau_p': omega_tau_p,
-        'ab_norm_meVA': ab * 1e3,
+        'ab_norm_meVA': ab_evA * 1e3,
     }

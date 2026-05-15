@@ -121,7 +121,7 @@ $$
 $$
 
 $$
-\tau_s = \frac{\hbar^2}{2\;m^*\;m_0\;\alpha_{\rm eff}^2\;\tau_p}
+\tau_s = \frac{\hbar^4}{8\;m^*\;m_0\;\alpha_{\rm eff}^2\;k_{\rm B}\;T\;\tau_p}
 $$
 
 $$
